@@ -1,0 +1,24 @@
+/*
+ * Authors: Ambuj Varshney <ambuj@tiku-os.org>
+ * settings.h - versioned touch settings and explicit persistence requests.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#ifndef SURFACE_SETTINGS_H
+#define SURFACE_SETTINGS_H
+#include "touch_report.h"
+#define SURFACE_SETTINGS_BYTES 32u
+/** @brief Settings status distinguishes defaults, pending saves and refused records. */
+enum { SURFACE_SETTINGS_DEFAULT, SURFACE_SETTINGS_SAVED, SURFACE_SETTINGS_PENDING,
+    SURFACE_SETTINGS_CORRUPT, SURFACE_SETTINGS_UNAVAILABLE, SURFACE_SETTINGS_FAILED,
+    SURFACE_SETTINGS_INCOMPATIBLE };
+/** @brief Serialized settings callbacks; save queues a copy and returns nonzero on acceptance. */
+typedef struct {
+    void *context;
+    unsigned (*read)(void *, surface_touch_map_t *);
+    int (*save)(void *, const surface_touch_map_t *);
+} surface_settings_provider_t;
+/** @brief Encode a validated mapping in a fixed little-endian version-1 record. */
+int surface_settings_encode(const surface_touch_map_t *, unsigned char out[SURFACE_SETTINGS_BYTES]);
+/** @brief Decode a checksummed record; errors leave the destination unchanged. */
+unsigned surface_settings_decode(const unsigned char *, unsigned length, surface_touch_map_t *);
+#endif

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Authors: Ambuj Varshney <ambuj@tiku-os.org>
+# SPDX-License-Identifier: Apache-2.0
+# Validate the dependency and commit message using pinned repository rules.
+set -eu
+root=$(git rev-parse --show-toplevel)
+python3 "$root/tools/check_foundation.py"
+exec python3 "$root/foundation/hygiene/check_commit_msg.py" "$1"

@@ -1,0 +1,128 @@
+{
+  "format": 1,
+  "product": "TikuSurface",
+  "foundation_profile": "portable-ui",
+  "geometry": {
+    "width": 800,
+    "height": 480,
+    "paint_format": "XRGB8888",
+    "display_format": "RGB565"
+  },
+  "applications": [
+    "word-calculator",
+    "media-browser",
+    "settings"
+  ],
+  "sdk_requirements": [
+    "control-models",
+    "local-rendering",
+    "font-subset",
+    "allocator-contexts",
+    "bounded-input",
+    "monotonic-time",
+    "static-applications",
+    "paged-storage-read",
+    "word-calculator"
+  ],
+  "configurations": {
+    "s31-local": {
+      "status": "planned",
+      "release_required": true,
+      "services": [
+        "display",
+        "touch",
+        "media",
+        "settings"
+      ]
+    },
+    "s31-connected": {
+      "status": "planned",
+      "release_required": true,
+      "services": [
+        "display",
+        "touch",
+        "media",
+        "settings",
+        "wifi-transfer-status"
+      ]
+    },
+    "s31-recording": {
+      "status": "deferred",
+      "release_required": false,
+      "reason": "S31 recording service and SRAM admission are missing"
+    }
+  },
+  "provisional_limits": {
+    "foreground_applications": 1,
+    "retiring_applications": 1,
+    "pending_launches": 1,
+    "browser_page_entries": 16,
+    "browser_read_bytes": 1024,
+    "application_psram_bytes": 262144,
+    "scratch_psram_bytes": 65536,
+    "added_irom_bytes": 196608,
+    "added_drom_bytes": 6144,
+    "added_sram_bytes_excluding_display_descriptors": 2048,
+    "residual_sram_bytes": 4096,
+    "browser_history_pages": 8
+  },
+  "host": {
+    "status": "implemented",
+    "applications": [
+      "word-calculator",
+      "fixture-media-browser",
+      "device-information"
+    ],
+    "input": [
+      "primary-pointer",
+      "hexadecimal-keys",
+      "backspace",
+      "escape"
+    ],
+    "presentation": "full-frame XRGB8888",
+    "persistent_settings": false
+  },
+  "firmware_diagnostic": {
+    "profiles": [
+      "s31-local",
+      "s31-connected"
+    ],
+    "status": "target-link-checked",
+    "runtime": "PSRAM allocator, microsecond clock, timer owner, delayed diagnostic presentation",
+    "lcd": false,
+    "touch": false,
+    "media_provider": "unavailable",
+    "hardware_qualified": false
+  },
+  "firmware_lcd": {
+    "profiles": [
+      "s31-local",
+      "s31-connected"
+    ],
+    "build_option": "S31_SURFACE_LCD=1",
+    "status": "host-and-link-checked",
+    "lcd": true,
+    "touch": true,
+    "media_provider": "mounted-native-media-read-only",
+    "pixel_budget": 1024,
+    "paint_rows": 4,
+    "hardware_qualified": false,
+    "resident_growth_gate": "link-checked",
+    "continuation_turn_limit": 32,
+    "continuation_time_us": 2000,
+    "hardware_timing_qualified": false,
+    "persistent_calibration": true,
+    "input_poll_interval_us": 10000,
+    "input_bus_budget_us": 3500,
+    "primary_contact_timeout_us": 100000,
+    "settings_save_interval_us": 5000000,
+    "media_hardware_timing_qualified": false,
+    "connected_service_status": {
+      "profile": "s31-connected",
+      "poll_interval_us": 250000,
+      "provider": "typed-cached-wifi-and-transfer-snapshots",
+      "read_only": true,
+      "hardware_qualified": false
+    }
+  }
+}

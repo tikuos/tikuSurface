@@ -1,0 +1,17 @@
+/build/
+/out/
+/temp/
+/foundation.local.mk
+__pycache__/
+*.py[cod]
+*.o
+*.a
+*.elf
+*.hex
+*.bin
+*.map
+*.d
+*.swp
+*.swo
+*~
+.DS_Store
