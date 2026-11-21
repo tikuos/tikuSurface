@@ -3,6 +3,7 @@
  * test_surface.c - behavioral, ownership and independent pixel expectations.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "tiku_event.h"
 #include "host.h"
 #include "surface_internal.h"
 #include "tiku_font.h"
@@ -53,9 +54,9 @@ static void calculator_and_pixels(void)
     assert(!strcmp(view.media_description, "Media: deterministic read-only fixture"));
     assert(surface_render(shell, surface_host_presenter(&host)) == TIKU_PRESENT_OK);
     assert(host.frame.width == 800 && host.frame.height == 480);
-    assert(host.frame.pixels[0] == 0x172b34);
-    assert(host.frame.pixels[80 * 800 + 1] == 0xe9edf1);
-    assert(host.frame.pixels[479 * 800 + 1] == 0xd8e1e7);
+    assert(host.frame.pixels[0] == 0x336698);
+    assert(host.frame.pixels[80 * 800 + 1] == 0x336698);
+    assert(host.frame.pixels[479 * 800 + 1] == 0x336698);
     uint32_t saved[32];
     memcpy(saved, host.frame.pixels + 200 * 800 + 32, sizeof saved);
     click(shell, 80, 200);
@@ -69,9 +70,9 @@ static void calculator_and_pixels(void)
     assert(!tiku_framebuffer_complete(host.frame.owner, host.frame.token + 1, TIKU_PRESENT_OK));
     (void)advance(&host, shell);
     assert(surface_render(shell, surface_host_presenter(&host)) == TIKU_PRESENT_OK);
-    assert(host.frame.pixels[121 * 800 + 33] == 0xffffff);
-    assert(host.frame.pixels[193 * 800 + 33] == 0xe9edf1);
-    key(shell, 8);
+    assert(host.frame.pixels[125 * 800 + 40] == 0xffffff);
+    assert(host.frame.pixels[193 * 800 + 33] == 0xd8d8d8);
+    key(shell, TIKU_KEY_BACKSPACE);
     view = step(shell); assert(!strcmp(view.hex, "F"));
     click(shell, 620, 390);
     for (unsigned i = 0; i < 20; ++i) key(shell, 'F');
@@ -79,10 +80,10 @@ static void calculator_and_pixels(void)
     assert(!strcmp(view.hex, "FFFFFFFFFFFFFFFF"));
     assert(!strcmp(view.bases[1], "18446744073709551615") && view.status == TIKU_RESOURCE_LIMIT);
     key(shell, '?'); assert(step(shell).status == TIKU_RESOURCE_INVALID);
-    key(shell, 8); assert(step(shell).status == TIKU_RESOURCE_OK);
+    key(shell, TIKU_KEY_BACKSPACE); assert(step(shell).status == TIKU_RESOURCE_OK);
     click(shell, 50, 30);
     view = step(shell); assert(view.foreground == SURFACE_HOME);
-    key(shell, 27); key(shell, 27);
+    key(shell, TIKU_KEY_ESCAPE); key(shell, TIKU_KEY_ESCAPE);
     assert(!surface_launch(shell, (surface_app_t)99));
     assert(step(shell).foreground == SURFACE_HOME);
     finish(&host, &shell);
@@ -144,9 +145,9 @@ static void browser(void)
     click(shell, 70, 130);
     view = advance(&host, shell);
     assert(view.reading && !strncmp(view.preview, "TikuSurface fixture file.", 24));
-    key(shell, 27); view = advance(&host, shell);
+    key(shell, TIKU_KEY_ESCAPE); view = advance(&host, shell);
     assert(!view.reading && !strcmp(view.path, "/docs"));
-    key(shell, 27); view = advance(&host, shell);
+    key(shell, TIKU_KEY_ESCAPE); view = advance(&host, shell);
     assert(!strcmp(view.path, "/") && view.row_count == 6);
     click(shell, 650, 410); view = step(shell);
     assert(!strcmp(view.rows[0], "sample-06.txt"));
@@ -168,7 +169,7 @@ static void browser(void)
     assert(view.status == TIKU_RESOURCE_OK && !strcmp(view.rows[0], "docs"));
     click(shell, 70, 130);
     assert(host.request.owner);
-    key(shell, 27);
+    key(shell, TIKU_KEY_ESCAPE);
     assert(host.request.cancelled);
     (void)advance(&host, shell);
     view = advance(&host, shell);
@@ -179,24 +180,24 @@ static void browser(void)
     click(shell, 50, 30); assert(step(shell).foreground == SURFACE_HOME);
     finish(&host, &shell);
 }
-/** @brief Home cancels a pending launch while late completion retains app memory. */
+/** @brief Explicit close retains pending buffers and serializes reopening that app. */
 static void retirement(void)
 {
     surface_host_t host;
     surface_config_t config = surface_host_config(&host);
     surface_t *shell = surface_create(&config);
     size_t baseline = host.memory.bytes;
-    assert(surface_launch(shell, SURFACE_BROWSER));
-    (void)step(shell);
+    assert(surface_launch(shell, SURFACE_BROWSER)); (void)step(shell);
     tiku_paged_storage_t *old = host.request.owner;
     uint64_t token = host.request.request->token;
-    assert(surface_launch(shell, SURFACE_CALCULATOR));
+    assert(surface_close(shell) == SURFACE_CLOSE_ACCEPTED);
+    assert(surface_launch(shell, SURFACE_BROWSER));
     surface_view_t view = step(shell);
-    assert(view.foreground == SURFACE_HOME && view.retiring && view.pending == SURFACE_CALCULATOR);
+    assert(view.foreground == SURFACE_HOME && view.retiring && view.pending == SURFACE_BROWSER);
     assert(host.request.owner == old && host.memory.bytes > baseline);
     assert(!tiku_paged_storage_complete(old, token + 1, TIKU_RESOURCE_OK, 0, 1, 1));
     size_t retained = host.memory.bytes;
-    for (int i = 0; i < 100; ++i) assert(surface_launch(shell, i % 2 ? SURFACE_BROWSER : SURFACE_SETTINGS));
+    for (int i = 0; i < 100; ++i) assert(surface_launch(shell, SURFACE_BROWSER));
     (void)step(shell);
     assert(host.cancellations == 1 && host.memory.bytes == retained);
     click(shell, 50, 30);
@@ -209,6 +210,7 @@ static void retirement(void)
     assert(surface_launch(shell, SURFACE_SETTINGS)); (void)step(shell);
     view = advance(&host, shell);
     assert(!view.retiring && view.foreground == SURFACE_SETTINGS);
+    assert(view.open_apps == ((1u << SURFACE_BROWSER) | (1u << SURFACE_SETTINGS)));
     finish(&host, &shell);
 }
 /** @brief Fail each shell and browser allocation and check recovery to the baseline. */
@@ -273,7 +275,7 @@ static void input_and_faults(void)
     assert(surface_post(shell, &event));
     assert(surface_launch(shell, SURFACE_HOME));
     assert(surface_launch(shell, SURFACE_CALCULATOR));
-    assert(!step(shell).hex[0]);
+    assert(!strcmp(step(shell).hex, "B"));
     host.now = 100; assert(!step(shell).clock_failed);
     host.now = 99; assert(step(shell).clock_failed);
     host.now = 101; assert(!step(shell).clock_failed);
@@ -298,7 +300,7 @@ static void input_and_faults(void)
     assert(!surface_post(shell, &event) && !surface_launch(shell, SURFACE_CALCULATOR));
     finish(&host, &shell);
 }
-/** @brief Repeated switches keep one request, bounded retirement and no retained bytes. */
+/** @brief Repeated switches retain bounded app models; explicit closes restore baseline. */
 static void endurance(void)
 {
     surface_host_t host;
@@ -310,18 +312,25 @@ static void endurance(void)
         assert(host.request.owner);
         assert(surface_launch(shell, SURFACE_CALCULATOR));
         surface_view_t view = step(shell);
-        assert(view.retiring && view.foreground == SURFACE_HOME);
+        assert(!view.retiring && view.foreground == SURFACE_CALCULATOR);
+        key(shell, 'A'); key(shell, 'B');
         assert(surface_launch(shell, SURFACE_SETTINGS));
         view = advance(&host, shell);
         assert(view.foreground == SURFACE_SETTINGS && !view.retiring);
         assert(surface_launch(shell, SURFACE_CALCULATOR)); (void)step(shell);
-        key(shell, 'A'); key(shell, 'B');
         assert(!strcmp(step(shell).bases[1], "171"));
+        size_t warmed = host.memory.bytes, calls = host.memory.calls;
         assert(surface_launch(shell, SURFACE_HOME)); (void)step(shell);
-        assert(host.memory.bytes == baseline && !host.request.owner);
+        assert(host.memory.bytes == warmed && !host.request.owner);
+        for (unsigned id = SURFACE_CALCULATOR; id <= SURFACE_SETTINGS; ++id) {
+            assert(surface_launch(shell, (surface_app_t)id)); (void)step(shell);
+            assert(host.memory.calls == calls);
+            assert(surface_close(shell) == SURFACE_CLOSE_ACCEPTED); (void)step(shell);
+        }
+        assert(host.memory.bytes == baseline && !step(shell).open_apps);
     }
     assert(host.memory.peak - baseline < 262144);
-    printf("1000 retirement cycles; shell=%zu bytes; app peak=%zu bytes\n", baseline, host.memory.peak - baseline);
+    printf("1000 switch/close cycles; shell=%zu bytes; app peak=%zu bytes\n", baseline, host.memory.peak - baseline);
     finish(&host, &shell);
 }
 /** @brief Sliced painting retains a copied view and submits complete frames. */
@@ -416,7 +425,7 @@ static void media_text_bounds(void)
         assert(!memcmp(actual+y*800+680,expected+y*800+680,(800-680)*sizeof *actual));
     char fitted[55];memset(fitted,'@',51);memcpy(fitted+51,"...",4);
     assert(tiku_text_width(tiku_font_plain(),fitted)<=632);
-    tiku_text(&b,tiku_font_plain(),48,137,fitted,0x20343f);
+    tiku_text(&b,tiku_font_plain(),48,137,fitted,0x000000);
     for(unsigned y=112;y<152;y++)assert(!memcmp(actual+y*800,expected+y*800,800*sizeof *actual));
     assert(strlen(view.rows[0])==63&&view.rows[0][62]=='@');
     view.row_count=0;view.path[0]=0;surface_paint(&b,&view);
@@ -428,13 +437,28 @@ static void media_text_bounds(void)
     for(unsigned y=146;y<170;y++)
         assert(!memcmp(actual+y*800+768,expected+y*800+768,32*sizeof *actual));
     char preview[64];memset(preview,'@',60);memcpy(preview+60,"...",4);
-    tiku_text(&b,tiku_font_plain(),32,160,preview,0x20343f);
+    tiku_text(&b,tiku_font_plain(),32,160,preview,0x000000);
     for(unsigned y=146;y<170;y++)assert(!memcmp(actual+y*800,expected+y*800,800*sizeof *actual));
+}
+
+/** @brief Returning through Home preserves the calculator's unfinished word. */
+static void retained_word(void)
+{
+    surface_host_t host;
+    surface_config_t config = surface_host_config(&host);
+    surface_t *shell = surface_create(&config);
+    assert(surface_launch(shell, SURFACE_CALCULATOR)); (void)step(shell);
+    key(shell, 'A'); key(shell, 'B');
+    assert(surface_launch(shell, SURFACE_HOME)); (void)step(shell);
+    assert(surface_launch(shell, SURFACE_CALCULATOR));
+    assert(!strcmp(step(shell).hex, "AB"));
+    finish(&host, &shell);
 }
 
 int main(int argc, char **argv)
 {
     struct { const char *name; void (*run)(void); } cases[] = {
+        {"retained-word", retained_word},
         {"pixels", calculator_and_pixels}, {"controls", control_pixels}, {"browser", browser}, {"retirement", retirement},
         {"allocation", allocation_failures}, {"input", input_and_faults}, {"endurance", endurance}, {"sliced", sliced_paint}, {"services", service_labels}, {"media-text",media_text_bounds}
     };

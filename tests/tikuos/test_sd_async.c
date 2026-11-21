@@ -1,6 +1,6 @@
 /*
  * Authors: Ambuj Varshney <ambuj@tiku-os.org>
- * test_sd_async.c - Read-only SD progression against an independent wire model.
+ * test_sd_async.c - SD read/write progression against an independent wire model.
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <assert.h>
@@ -26,6 +26,8 @@ static unsigned claims, bus_open, bus_closes, commands, polls, batch_max, acmd;
 static unsigned bad_crc, no_token, no_response, bad_register, fail_spi, fail_claim, kernel=1;
 static uint8_t wire[1024], sector[512];
 static unsigned head,tail;
+static unsigned write_stage,write_bytes,write_count,bad_write_response,bad_status,busy_forever,programming;
+static uint8_t written[512];
 static tiku_s31_spi_async_t *bus_op;
 uint64_t tiku_s31_time(void) { return ticks; }
 int tiku_thread_in_kernel(void) { return (int)kernel; }
@@ -68,6 +70,8 @@ static void wire_command(const uint8_t *tx)
         data[15]=(uint8_t)((cmd==9?0xb3:0x03) ^ (bad_register?2:0));
         payload(data,16);
     }
+    if(cmd==24){assert(tx[1]==0 && tx[2]==0 && tx[3]==0 && tx[4]==7);write_stage=1;write_bytes=0;}
+    if(cmd==13){wire[tail++]=(uint8_t)bad_status;programming=0;}
     if(cmd==17){assert(tx[1]==0 && tx[2]==0 && tx[3]==0 && tx[4]==7);payload(sector,512);}
 }
 int tiku_s31_spi_init_begin(tiku_s31_spi_async_t *op,const tiku_spi_config_t *config)
@@ -86,6 +90,17 @@ int tiku_s31_spi_begin(tiku_s31_spi_async_t *op,const uint8_t *tx,uint8_t *rx,ui
     assert(bus_open && !bus_op && length && length<=64);
     if(length>batch_max)batch_max=length;
     if(tx && length==6)wire_command(tx);
+    else if(tx && write_stage==1){assert(length==1 && tx[0]==254);write_stage=2;}
+    else if(tx && write_stage==2){
+        assert(length==64 && write_bytes+length<=512);memcpy(written+write_bytes,tx,length);write_bytes+=length;
+        if(write_bytes==512)write_stage=3;
+    } else if(tx && write_stage==3){
+        assert(length==2 && (((unsigned)tx[0]<<8)|tx[1])==wire_checksum(written,512));
+        head=tail=0;wire[tail++]=255;wire[tail++]=(uint8_t)(bad_write_response?11:5);
+        wire[tail++]=0;wire[tail++]=0;wire[tail++]=0;
+        if(!busy_forever)wire[tail++]=255;
+        write_stage=0;programming=1;++write_count;
+    }
     *op=(tiku_s31_spi_async_t){.rx=rx,.length=length,.phase=2};bus_op=op;return 1;
 }
 int tiku_s31_spi_poll(tiku_s31_spi_async_t *op)
@@ -93,7 +108,7 @@ int tiku_s31_spi_poll(tiku_s31_spi_async_t *op)
     assert(bus_open && bus_op==op);++polls;
     if(fail_spi){bus_op=NULL;return TIKU_SPI_ERR_TIMEOUT;}
     if(op->phase++==2)return 1;
-    for(unsigned i=0;op->rx && i<op->length;i++)op->rx[i]=head<tail?wire[head++]:255;
+    for(unsigned i=0;op->rx && i<op->length;i++)op->rx[i]=head<tail?wire[head++]:(busy_forever && programming?0:255);
     bus_op=NULL;return 0;
 }
 void tiku_spi_arch_close(void) { assert(bus_open);bus_open=0;bus_op=NULL;++bus_closes; }
@@ -120,7 +135,7 @@ static int drain(tiku_s31_sd_async_t *op)
 /** @brief Open and validate a capacity and identity without a synchronous driver call. */
 static void open_card(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card)
 {
-    acmd=head=tail=0;
+    acmd=head=tail=write_stage=programming=0;
     assert(tiku_s31_sd_open_begin(op,card)==1);
     assert(drain(op)==0 && card->sectors==32768 && card->cid[0]==0x12 && claims==4 && bus_open);
 }
@@ -168,6 +183,44 @@ int main(void)
     assert(tiku_s31_sd_open_begin(&op,&card)==1);fail_spi=1;
     assert(step(&op)==TIKU_S31_SD_IO && !claims && !bus_open);fail_spi=0;
     ticks=(1ULL<<52)-8000;open_card(&op,&card);assert(!tiku_s31_sdcard_close(&card));
+    open_card(&op,&card);
+    assert(tiku_s31_sd_write_begin(&op,&card,7,sector)==TIKU_S31_SD_INVALID);
+    assert(!tiku_s31_sdcard_write_enable(&card,7,1));
+    assert(tiku_s31_sd_write_begin(&op,&card,6,sector)==TIKU_S31_SD_INVALID);
+    assert(tiku_s31_sd_write_begin(&op,&card,8,sector)==TIKU_S31_SD_INVALID);
+    assert(tiku_s31_sd_write_begin(&op,&card,7,sector)==1);
+    assert(tiku_s31_sd_sync_begin(&other,&card)==TIKU_S31_SD_BUSY);
+    assert(!drain(&op) && write_count==1 && !memcmp(written,sector,512) && !pending);
+    assert(tiku_s31_sd_sync_begin(&op,&card)==1 && !drain(&op));
+    assert(!tiku_s31_sdcard_close(&card));
+    for(unsigned stop=0;stop<110;++stop){
+        open_card(&op,&card);assert(!tiku_s31_sdcard_write_enable(&card,7,1));
+        assert(tiku_s31_sd_write_begin(&op,&card,7,sector)==1);
+        unsigned i;for(i=0;i<stop;i++)if(step(&op)!=1)break;
+        if(i==stop){
+            unsigned turns=0;int rc;
+            do{unsigned before=polls;rc=tiku_s31_sd_cancel(&op);assert(polls-before<=1);ticks+=8000;assert(++turns<4000);}while(rc==TIKU_S31_SD_BUSY);
+            assert(!rc);
+        }else assert(!tiku_s31_sdcard_close(&card));
+        assert(!claims && !bus_open && !pending);
+    }
+    for(unsigned failure=0;failure<4;++failure){
+        open_card(&op,&card);assert(!tiku_s31_sdcard_write_enable(&card,7,1));
+        bad_write_response=failure==0;busy_forever=failure==1;bad_status=failure==2;
+        assert(tiku_s31_sd_write_begin(&op,&card,7,sector)==1);
+        if(failure==3){while(op.state!=33)assert(step(&op)==1);fail_spi=1;}
+        if(failure==3){
+            while(op.state!=40)assert(step(&op)==1);
+            uint64_t reset_start=op.timer;
+            while(((ticks-reset_start)&((1ULL<<52)-1))<320000u){
+                assert(claims==4&&pending&&op.output==sector&&tiku_s31_sd_open_begin(&other,&card)==TIKU_S31_SD_BUSY);
+                assert(step(&op)==1);
+            }
+        }
+        int rc=drain(&op);assert(rc==(failure==1?TIKU_S31_SD_TIMEOUT:TIKU_S31_SD_IO));
+        assert(!claims && !bus_open && !pending && !op.state);
+        bad_write_response=busy_forever=bad_status=fail_spi=0;
+    }
     kernel=0;assert(tiku_s31_sd_open_begin(&op,&card)==TIKU_S31_SD_INVALID);
-    puts("SD: delayed identification/read, wire CRC, no response/token, exclusion, cancellation and wrap pass");
+    puts("SD: read/write CRC, status, authorization, bounded phases, cancellation, fault reset and wrap pass");
 }

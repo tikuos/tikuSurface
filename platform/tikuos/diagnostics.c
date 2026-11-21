@@ -47,6 +47,21 @@ static int display_read(char *buffer, size_t capacity)
         (unsigned long)SURFACE_LCD_ENABLE, (unsigned long)s.completed, (unsigned long)s.display_errors);
 }
 
+/** @brief Copy completed frame timing and identity without advancing rendering. */
+static int timing_read(char *buffer, size_t capacity)
+{
+    surface_frame_stats_t s;
+    if (!surface_os_in_owner()) return TIKU_VFS_EACCES;
+    if (!surface_runtime_frame_stats(&s)) return TIKU_VFS_EIO;
+    return snprintf(buffer, capacity,
+        "frame_us=%lu max_frame_us=%lu frame_app=%lu frame_count=%lu pending=%lu "
+        "request_us=%lu max_request_us=%lu requested=%lu presented_request=%lu\n",
+        (unsigned long)s.frame_us, (unsigned long)s.max_frame_us,
+        (unsigned long)s.foreground, (unsigned long)s.completed, (unsigned long)s.pending,
+        (unsigned long)s.request_us, (unsigned long)s.max_request_us,
+        (unsigned long)s.requested, (unsigned long)s.presented_request);
+}
+
 /** @brief Accept a decimal suffix up to limit, with no sign, spaces or trailing data. */
 static int number(const char *text, size_t length, unsigned limit, unsigned *value)
 {
@@ -130,6 +145,7 @@ static const tiku_vfs_node_t children[] = {
     {.name = "touch", .type = TIKU_VFS_FILE, .read = input_read},
     {.name = "calibration", .type = TIKU_VFS_FILE, .read = calibration_read, .write = calibration_write, .req_cap = TIKU_VFS_CAP_SYS},
     {.name = "display", .type = TIKU_VFS_FILE, .read = display_read},
+    {.name = "timing", .type = TIKU_VFS_FILE, .read = timing_read},
     {.name = "control", .type = TIKU_VFS_FILE, .write = control_write,
      .req_cap = TIKU_VFS_CAP_SYS}
 };

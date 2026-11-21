@@ -12,6 +12,23 @@ static tiku_tfs_t files;
 static uint8_t original[32],replacement[32];
 static _Alignas(8) unsigned char bridge[SURFACE_SETTINGS_IO_BYTES];
 
+#if SURFACE_PREFERENCES_NVM
+static const unsigned char calibration_guard[32]={1,9,3,7};
+/** @brief Seed a desktop record using the fixture's synchronous setup backend. */
+static int preferences_seed(const unsigned char *data,size_t n)
+{return tiku_tfs_write(&files,"tikusurface-desk-v1",data,n)==TFS_OK?0:-1;}
+/** @brief Check the independent calibration record during preference recovery. */
+static int preferences_read(unsigned char *out,size_t capacity,size_t *length)
+{
+    unsigned char guard[32];size_t n;
+    assert(tiku_tfs_read(&files,"tikusurface-cal-v1",guard,sizeof guard,&n)==TFS_OK&&n==32&&!memcmp(guard,calibration_guard,32));
+    return surface_os_preferences_read(out,capacity,length);
+}
+#define surface_os_settings_read preferences_read
+#define surface_os_settings_write preferences_seed
+#define surface_os_settings_begin surface_os_preferences_begin
+#endif
+
 /** @brief Translate the data-store view to the production region backend during setup. */
 static int store_write(tiku_nvm_backend_t *be,size_t off,const void *data,size_t n)
 {
@@ -36,6 +53,9 @@ static void prepare_files(int prior)
     prepare();allows_sync=1;memset(&files,0,sizeof files);
     assert(tiku_tfs_init(&files,&store)==TFS_OK);
     assert(tiku_tfs_write(&files,"user-note","unrelated",10)==TFS_OK);
+#if SURFACE_PREFERENCES_NVM
+    assert(tiku_tfs_write(&files,"tikusurface-cal-v1",calibration_guard,32)==TFS_OK);
+#endif
     if(prior)assert(surface_os_settings_write(original,32)==0);
     allows_sync=0;memcpy(baseline,flash,sizeof flash);mount_files();
 }

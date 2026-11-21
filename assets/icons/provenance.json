@@ -1,0 +1,27 @@
+{
+  "format": "premultiplied ARGB8888, 48x48",
+  "renderer_revision": "6f67e29a42b6f8e65e45b228ba8748039071c200",
+  "icons": [
+    {
+      "name": "app_devcalc",
+      "source": "kits/translation/tiku_icons_app_devcalc.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "2b604f43c70ab081a731978eb26ec97b8ea21068aedf6813d968710753115a4e",
+      "raster_sha256": "a0981c3669fe08c93c7f5f0e6d4ba0d499d95c3cfeac37155b07ad5b64dab1af"
+    },
+    {
+      "name": "compare_folders",
+      "source": "kits/translation/tiku_icons_utils.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "4d883787db1278d518387889e7af60390294880f2c47972125885b3c29620e23",
+      "raster_sha256": "ce6e46287eeeb06dd084ade248c48838a7a65b27aad58316fca33bfc151c0b73"
+    },
+    {
+      "name": "section_identity",
+      "source": "kits/translation/tiku_icons_section_identity.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "10e6c1926503576917f482bbc35107c0ecfed60c6e591d1731dc5c94aedf9aca",
+      "raster_sha256": "9a4f761aa112c4e09cb83bb48f4bb0a2b6174f7e5002a42b683ae8b99a2ecd47"
+    }
+  ]
+}

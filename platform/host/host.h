@@ -10,10 +10,30 @@
 /** @brief Allocation accounting and one-based injected failure position. */
 typedef struct {
     size_t live, bytes, peak, calls, fail_at;
-    struct { void *pointer; size_t bytes, alignment; } records[64];
+    struct { void *pointer; size_t bytes, alignment; } records[SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:64];
 } surface_host_memory_t;
 /** @brief Fixed host providers; advance time and poll from the owner thread. */
 typedef struct {
+#if SURFACE_TERMINAL
+#if SURFACE_BASIC
+    char program_source[8193];
+    int program_state,program_busy,program_stops;
+#endif
+    int terminal_open,terminal_close_delay,terminal_write_limit,terminal_error;
+    size_t terminal_in_size,terminal_out_size;
+    char terminal_input[1024],terminal_output[4096];
+#endif
+#if SURFACE_VFS
+    unsigned vfs_reads,vfs_writes,vfs_lists,vfs_stats;
+    int vfs_fail_read,vfs_fail_write,vfs_readonly;
+    char vfs_value[256];
+#endif
+#if SURFACE_DEVICE
+    unsigned device_reads,process_reads;
+    int process_missing,process_error;
+    int device_failed;
+    uint32_t device_used;
+#endif
     surface_host_memory_t memory;
     uint64_t now, storage_delay, present_delay, epoch;
     int clock_error, unavailable, present_error, present_busy;

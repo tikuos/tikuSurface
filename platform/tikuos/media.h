@@ -21,7 +21,7 @@ typedef struct {
     unsigned pending, cancelled, phase, exclusive;
     int final_status, eof;
 } surface_media_t;
-/** @brief Bind initialized firmware storage and return the read-only SDK provider. */
+/** @brief Bind initialized firmware storage and return the scoped SDK provider. */
 tiku_storage_provider_t surface_media_init(surface_media_t *, void *bridge);
 /** @brief Advance at most one queue operation; completion releases the SDK request view. */
 void surface_media_poll(surface_media_t *);

@@ -3,12 +3,22 @@
  * runtime.c - PSRAM-owned UI runtime and presentation retirement.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "build_identity.h"
 #include "runtime.h"
 #include "surface.h"
 #if SURFACE_LCD_ENABLE
 #include "display.h"
 #include "presentation.h"
 #include "input.h"
+#if SURFACE_TERMINAL
+#include "console_io.h"
+#if SURFACE_DEVICE
+#include "device_io.h"
+#if SURFACE_VFS
+#include "vfs_io.h"
+#endif
+#endif
+#endif
 #include "touch.h"
 #include "media.h"
 #include "settings_io.h"
@@ -30,14 +40,27 @@ typedef struct {
     unsigned display_attempted, completed, display_errors;
     uint64_t burst_start;
     unsigned burst_turns;
+    uint64_t frame_started;
+    surface_frame_stats_t frame_stats;
+    unsigned frame_active, frame_foreground;
+    uint64_t request_started, frame_request_started;
+    unsigned request_active, request_app, frame_request_active;
+    uint32_t frame_request_id;
     surface_touch_t touch;
     surface_input_stats_t input_stats;
+#if SURFACE_TERMINAL
+    _Alignas(16) unsigned char console_bridge[SURFACE_CONSOLE_BRIDGE_BYTES];
+#endif
     surface_touch_map_t saved_map, pending_map;
     unsigned settings_status, settings_pending;
+#if SURFACE_PREFERENCES
+    surface_preferences_t saved_preferences,pending_preferences;
+    unsigned preferences_status,settings_kind;
+#endif
     uint64_t next_save;
     _Alignas(8) unsigned char settings_bridge[SURFACE_SETTINGS_IO_BYTES];
     surface_media_t media;
-    _Alignas(8) unsigned char media_bridge[8192];
+    _Alignas(8) unsigned char media_bridge[SURFACE_MEDIA_BRIDGE_BYTES];
     unsigned touch_open, touch_bus_owned;
     uint64_t next_touch;
     unsigned work_phase;
@@ -46,7 +69,7 @@ typedef struct {
     uint64_t next_services;
 #endif
 #endif
-    allocation_t slots[32];
+    allocation_t slots[SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32];
     size_t first, capacity, live, peak;
     unsigned calls, fail_at, failures;
     int stopping;
@@ -72,10 +95,26 @@ static int settings_save(void *context, const surface_touch_map_t *map)
     if (state->stopping || state->settings_pending || !surface_touch_map_valid(map) ||
         state->settings_status == SURFACE_SETTINGS_INCOMPATIBLE ||
         state->settings_status == SURFACE_SETTINGS_UNAVAILABLE) return 0;
+#if SURFACE_PREFERENCES
+    state->settings_kind=0;
+#endif
     state->pending_map = *map; state->settings_pending = 1;
     state->settings_status = SURFACE_SETTINGS_PENDING;
     return 1;
 }
+
+#if SURFACE_PREFERENCES
+/** @brief Copy applied desktop preferences without storage access. */
+static unsigned preferences_read(void *context,surface_preferences_t *out)
+{runtime_t *s=context;*out=s->saved_preferences;return s->preferences_status;}
+/** @brief Serialize desktop and calibration updates through the retained bridge. */
+static int preferences_save(void *context,const surface_preferences_t *p)
+{
+    runtime_t *s=context;
+    if(s->stopping||s->settings_pending||!surface_preferences_valid(p)||s->preferences_status==SURFACE_SETTINGS_INCOMPATIBLE||s->preferences_status==SURFACE_SETTINGS_UNAVAILABLE)return 0;
+    s->pending_preferences=*p;s->settings_kind=1;s->settings_pending=1;s->preferences_status=SURFACE_SETTINGS_PENDING;return 1;
+}
+#endif
 
 /** @brief Submit the converted back buffer without transferring ownership on refusal. */
 static tiku_present_result_t scanout_submit(void *context, unsigned back, tiku_rect_t r, uint64_t token)
@@ -92,7 +131,25 @@ static tiku_present_result_t scanout_poll(void *context, uint64_t token)
 {
     runtime_t *state = context;
     int result = surface_os_display_poll(token);
-    if (result == SURFACE_SCANOUT_OK) { ++state->completed; return TIKU_PRESENT_OK; }
+    if (result == SURFACE_SCANOUT_OK) {
+        ++state->completed;
+        uint64_t elapsed = surface_os_time() - state->frame_started;
+        uint32_t duration = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+        state->frame_stats.frame_us = duration;
+        if (duration > state->frame_stats.max_frame_us) state->frame_stats.max_frame_us = duration;
+        state->frame_stats.foreground = state->frame_foreground;
+        state->frame_stats.completed = state->completed;
+        if (state->frame_request_active) {
+            elapsed = surface_os_time() - state->frame_request_started;
+            duration = elapsed > UINT32_MAX ? UINT32_MAX : (uint32_t)elapsed;
+            state->frame_stats.request_us = duration;
+            if (duration > state->frame_stats.max_request_us) state->frame_stats.max_request_us = duration;
+            state->frame_stats.presented_request = state->frame_request_id;
+            state->frame_request_active = 0;
+        }
+        state->frame_active = 0;
+        return TIKU_PRESENT_OK;
+    }
     if (result == SURFACE_SCANOUT_ERROR) return TIKU_PRESENT_ERROR;
     if (result != SURFACE_SCANOUT_BUSY) surface_runtime_stop();
     return TIKU_PRESENT_BUSY;
@@ -106,7 +163,7 @@ static size_t align_up(size_t value, size_t alignment)
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-/** @brief Find a gap in at most 33 passes over 32 fixed allocation records. */
+/** @brief Find a gap in at most one more pass than the configured allocation-record count. */
 static void *allocate(void *context, size_t bytes, size_t alignment)
 {
     runtime_t *state = context;
@@ -114,12 +171,12 @@ static void *allocate(void *context, size_t bytes, size_t alignment)
     unsigned slot = 0;
     ++state->calls;
     if (!bytes || state->calls == state->fail_at) goto fail;
-    while (slot < 32 && state->slots[slot].bytes) ++slot;
-    if (slot == 32) goto fail;
-    for (unsigned pass = 0; pass <= 32; ++pass) {
+    while (slot < (SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32) && state->slots[slot].bytes) ++slot;
+    if (slot == (SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32)) goto fail;
+    for (unsigned pass = 0; pass <= (SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32); ++pass) {
         int overlap = 0;
         if (offset > state->capacity || bytes > state->capacity - offset) goto fail;
-        for (unsigned i = 0; i < 32; ++i) {
+        for (unsigned i = 0; i < (SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32); ++i) {
             allocation_t *entry = &state->slots[i];
             if (entry->bytes && offset < entry->offset + entry->bytes && entry->offset < offset + bytes) {
                 offset = align_up(entry->offset + entry->bytes, alignment);
@@ -130,7 +187,7 @@ static void *allocate(void *context, size_t bytes, size_t alignment)
         if (!overlap) {
             state->slots[slot] = (allocation_t){offset, bytes, alignment};
             state->live += bytes;
-            if (state->live > state->peak) state->peak = state->live;
+            if (offset + bytes > state->peak) state->peak = offset + bytes;
             return (unsigned char *)state + offset;
         }
     }
@@ -143,7 +200,7 @@ fail:
 static void release(void *context, void *pointer, size_t bytes, size_t alignment)
 {
     runtime_t *state = context;
-    for (unsigned i = 0; i < 32; ++i) {
+    for (unsigned i = 0; i < (SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32); ++i) {
         allocation_t *entry = &state->slots[i];
         if (entry->bytes && (unsigned char *)state + entry->offset == pointer &&
             entry->bytes == bytes && entry->alignment == alignment) {
@@ -189,14 +246,14 @@ void surface_runtime_stats(surface_runtime_stats_t *out)
     if (!out) return;
     *out = last;
     if (runtime) {
-        surface_view_t view;
-        surface_view(runtime->shell, &view);
+        surface_app_t current; tiku_resource_error_t status;
+        surface_activity(runtime->shell,&current,&status);
         unsigned live = 0;
-        for (unsigned i = 0; i < 32; ++i) live += runtime->slots[i].bytes != 0;
+        for (unsigned i = 0; i < (SURFACE_EDITOR_DOCUMENTS?160:SURFACE_NOTES?128:SURFACE_DIFF?80:SURFACE_VFS?64:SURFACE_EDITOR?48:32); ++i) live += runtime->slots[i].bytes != 0;
         *out = (surface_runtime_stats_t){1, (uint32_t)runtime->stopping, runtime->turns,
             runtime->frames, live, (uint32_t)runtime->live, (uint32_t)runtime->peak,
             runtime->last_us, runtime->max_us, runtime->overruns, runtime->failures,
-            (uint32_t)view.foreground, view.status == TIKU_RESOURCE_UNAVAILABLE,
+            (uint32_t)current, status == TIKU_RESOURCE_UNAVAILABLE,
             SURFACE_LCD_ENABLE, 0, 0};
 #if SURFACE_LCD_ENABLE
         out->completed = runtime->completed;
@@ -215,10 +272,19 @@ int surface_runtime_start(void)
     static const tiku_storage_provider_ops_t storage = {storage_submit, storage_cancel};
 #endif
     if (runtime) return 0;
+#if SURFACE_LCD_ENABLE
+    uint64_t requested = surface_os_time();
+#endif
     runtime_t *state = surface_os_reserve(SURFACE_RUNTIME_BYTES);
     if (!state) return 0;
     memset(state, 0, sizeof *state);
+#if SURFACE_LCD_ENABLE
+    state->request_started = requested;
+    state->request_active = 1;
+    state->frame_stats.requested = 1;
+#endif
     state->first = align_up(sizeof *state, 64);
+    state->peak = state->first;
     state->capacity = SURFACE_RUNTIME_BYTES;
     state->fail_at = failure_at;
     runtime = state;
@@ -229,14 +295,16 @@ int surface_runtime_start(void)
         if (!state->scanout[i]) goto fail;
     }
     if (!surface_presentation_init(&state->presentation, state->scanout[0], SURFACE_SCANOUT_BYTES,
-        state->scanout[1], SURFACE_SCANOUT_BYTES, 0, 1024, &display_sequence, &scanout_ops, state)) goto fail;
+        state->scanout[1], SURFACE_SCANOUT_BYTES, 0, SURFACE_DESKTOP ? 4096 : 1024,
+        &display_sequence, &scanout_ops, state)) goto fail;
 #endif
     surface_config_t config = {
+        .build_identity = SURFACE_BUILD_ID,
         .platform_name = SURFACE_LCD_ENABLE ? "TikuSurface S31 LCD runtime" : "TikuSurface S31 diagnostic runtime",
         .media_description = "Media: unavailable",
         .services_description = SURFACE_LCD_ENABLE ? "LCD and touch enabled; calibration requires panel qualification" :
             "LCD, touch and settings controls: unavailable",
-        .paint_rows = 2,
+        .paint_rows = SURFACE_DESKTOP ? 4 : 2,
         .allocator = {&allocator, state}, .clock = {read_clock, state, 0},
 #if !SURFACE_LCD_ENABLE
         .storage = {&storage, state, TIKU_RESOURCE_FEATURE_READ | TIKU_RESOURCE_FEATURE_COLLECTION | TIKU_RESOURCE_FEATURE_STREAM}
@@ -247,6 +315,24 @@ int surface_runtime_start(void)
     memcpy(state->services_label,"Wi-Fi unavailable; transfer unavailable",
            sizeof "Wi-Fi unavailable; transfer unavailable");
     config.services_description=state->services_label;
+#if SURFACE_TRANSFERS
+    config.transfers=surface_os_transfers();
+#endif
+#endif
+#if SURFACE_TERMINAL
+    static const tiku_terminal_provider_ops_t console_ops={surface_os_console_open,surface_os_console_close,
+        surface_os_console_write,surface_os_console_read,surface_os_console_interrupt};
+    if(surface_os_console_size()>sizeof state->console_bridge)goto fail;
+    surface_os_console_init(state->console_bridge);config.terminal=(tiku_terminal_provider_t){&console_ops,state->console_bridge};
+#if SURFACE_BASIC
+    config.program=(surface_program_provider_t){state->console_bridge,surface_os_program_start,surface_os_program_state,surface_os_program_stop};
+#endif
+#endif
+#if SURFACE_DEVICE
+    config.device=(surface_device_provider_t){NULL,surface_os_device_read,surface_os_process_read};
+#if SURFACE_VFS
+    config.vfs=(surface_vfs_provider_t){NULL,surface_os_vfs_list,surface_os_vfs_stat,surface_os_vfs_read,surface_os_vfs_write};
+#endif
 #endif
     if (surface_os_media_size() > sizeof state->media_bridge) goto fail;
     surface_os_media_init(state->media_bridge);
@@ -257,9 +343,24 @@ int surface_runtime_start(void)
     state->settings_status = loaded == 1 ? SURFACE_SETTINGS_DEFAULT : loaded ? SURFACE_SETTINGS_UNAVAILABLE :
         surface_settings_decode(record, (unsigned)length, &state->saved_map);
     config.settings = (surface_settings_provider_t){state, settings_read, settings_save};
+#if SURFACE_PREFERENCES
+    length=0;loaded=surface_os_preferences_read(record,sizeof record,&length);
+    state->preferences_status=loaded==1?SURFACE_SETTINGS_DEFAULT:loaded?SURFACE_SETTINGS_UNAVAILABLE:surface_preferences_decode(record,(unsigned)length,&state->saved_preferences);
+    config.preferences=(surface_preferences_provider_t){state,preferences_read,preferences_save};
+#endif
     config.media_description = "Media: read-only native SD; mount required";
 #endif
     memcpy(config.caller.principal, "surface-local", sizeof "surface-local");
+#if SURFACE_FILE_JOBS
+    config.caller.authenticated=1;
+    config.caller.scopes=TIKU_RESOURCE_READ|TIKU_RESOURCE_CONTENT|TIKU_RESOURCE_WRITE;
+#if SURFACE_DIRECTORIES
+    config.caller.scopes|=TIKU_RESOURCE_HOST_CONTROL;
+#endif
+#if SURFACE_LCD_ENABLE
+    config.media_description="Media: native SD file operations; mount required";
+#endif
+#endif
     state->shell = surface_create(&config);
     if (!state->shell) goto fail;
 #if SURFACE_LCD_ENABLE
@@ -296,11 +397,21 @@ void surface_runtime_stop(void)
 
 int surface_runtime_launch(unsigned id)
 {
-    if (!runtime || id > SURFACE_SETTINGS || runtime->stopping) return 0;
+    if (!runtime || id > SURFACE_APP_LAST || runtime->stopping) return 0;
 #if SURFACE_LCD_ENABLE
+    uint64_t requested = surface_os_time();
     surface_touch_cancel(&runtime->touch, runtime->shell);
 #endif
-    return surface_launch(runtime->shell, (surface_app_t)id);
+    int accepted = surface_launch(runtime->shell, (surface_app_t)id);
+#if SURFACE_LCD_ENABLE
+    if (accepted) {
+        runtime->request_started = requested;
+        runtime->request_app = id;
+        runtime->request_active = 1;
+        ++runtime->frame_stats.requested;
+    }
+#endif
+    return accepted;
 }
 
 int surface_runtime_input_stats(surface_input_stats_t *out)
@@ -337,17 +448,48 @@ int surface_runtime_calibrate(const surface_touch_map_t *map)
 #endif
 }
 
+int surface_runtime_preferences(surface_preferences_t *out,unsigned *status)
+{
+#if SURFACE_LCD_ENABLE && SURFACE_PREFERENCES
+    if(!runtime||!out||!status)return 0;
+    *status=preferences_read(runtime,out);return 1;
+#else
+    (void)out;(void)status;return 0;
+#endif
+}
+int surface_runtime_set_preferences(const surface_preferences_t *p)
+{
+#if SURFACE_LCD_ENABLE && SURFACE_PREFERENCES
+    return runtime&&preferences_save(runtime,p);
+#else
+    (void)p;return 0;
+#endif
+}
+
 int surface_runtime_continue(void)
 {
 #if SURFACE_LCD_ENABLE
     runtime_t *state = runtime;
-    if (state && !state->stopping && state->burst_turns && state->burst_turns < 32 &&
-        surface_os_time() - state->burst_start < 2000 &&
+    if (state && !state->stopping && state->burst_turns && state->burst_turns < (SURFACE_DESKTOP ? 64u : 32u) &&
+        surface_os_time() - state->burst_start < (SURFACE_DESKTOP ? 20000u : 2000u) &&
         (state->presentation.source.owner || surface_render_pending(state->shell) || state->media.request ||
          state->settings_pending>=2 || (state->settings_pending==1 && surface_os_time()>=state->next_save))) return 1;
     if (state) state->burst_turns = 0;
 #endif
     return 0;
+}
+
+int surface_runtime_frame_stats(surface_frame_stats_t *out)
+{
+#if SURFACE_LCD_ENABLE
+    if (!runtime || !out) return 0;
+    *out = runtime->frame_stats;
+    out->pending = runtime->frame_active || surface_render_pending(runtime->shell);
+    return 1;
+#else
+    (void)out;
+    return 0;
+#endif
 }
 
 int surface_runtime_poll(void)
@@ -400,14 +542,25 @@ int surface_runtime_poll(void)
         int rc;
         if (state->settings_pending==1) {
             unsigned char record[SURFACE_SETTINGS_BYTES];
+#if SURFACE_PREFERENCES
+            if(state->settings_kind)rc=surface_preferences_encode(&state->pending_preferences,record)?surface_os_preferences_begin(state->settings_bridge,record,sizeof record):-1;
+            else
+#endif
             rc=surface_settings_encode(&state->pending_map,record) ?
                 surface_os_settings_begin(state->settings_bridge,record,sizeof record) : -1;
             if (rc==1) state->settings_pending=2;
         } else rc=surface_os_settings_poll(state->settings_bridge);
         if (rc!=1) {
             state->settings_pending=0;
-            state->settings_status=rc==0 ? SURFACE_SETTINGS_SAVED : SURFACE_SETTINGS_FAILED;
             state->next_save=started>UINT64_MAX-5000000 ? UINT64_MAX : started+5000000;
+#if SURFACE_PREFERENCES
+            if(state->settings_kind){
+                state->preferences_status=rc==0?SURFACE_SETTINGS_SAVED:SURFACE_SETTINGS_FAILED;
+                if(!rc){state->saved_preferences=state->pending_preferences;if(!state->stopping)surface_preferences_refresh(state->shell);}
+            }else
+#endif
+            {
+            state->settings_status=rc==0 ? SURFACE_SETTINGS_SAVED : SURFACE_SETTINGS_FAILED;
             if (!rc) {
                 state->saved_map=state->pending_map;
                 if (!state->stopping) {
@@ -415,14 +568,19 @@ int surface_runtime_poll(void)
                     state->touch.map=state->saved_map;
                 }
             }
+            }
         }
     }
     if (!state->stopping && !io_turn && state->media.request && (work&3u)==0) {
         surface_media_poll(&state->media);
         io_turn = 1;
     }
+#if SURFACE_DESKTOP
+    int stepped = !state->stopping;
+    if (stepped) surface_step(state->shell);
+#endif
     if (!state->burst_turns) state->burst_start = started;
-    if (state->burst_turns < 32) ++state->burst_turns;
+    if (state->burst_turns < (SURFACE_DESKTOP ? 64u : 32u)) ++state->burst_turns;
     if (!state->stopping) {
         if (!surface_os_display_health()) {
             ++state->display_errors;
@@ -433,7 +591,22 @@ int surface_runtime_poll(void)
                 ++state->display_errors;
                 surface_runtime_stop();
             }
-        } else if (!io_turn) (void)surface_render(state->shell, (tiku_presenter_t){present, state});
+        } else if (!io_turn) {
+            if (!state->frame_active && surface_render_pending(state->shell)) {
+                surface_app_t current; tiku_resource_error_t status;
+                surface_activity(state->shell, &current, &status);
+                state->frame_started = started;
+                state->frame_foreground = current;
+                state->frame_active = 1;
+                if (state->request_active && state->request_app == (unsigned)current) {
+                    state->frame_request_started = state->request_started;
+                    state->frame_request_id = state->frame_stats.requested;
+                    state->frame_request_active = 1;
+                    state->request_active = 0;
+                }
+            }
+            (void)surface_render(state->shell, (tiku_presenter_t){present, state});
+        }
     }
     if (state->stopping && state->touch_open) {
         surface_os_input_close(&state->touch_bus_owned);
@@ -457,7 +630,11 @@ int surface_runtime_poll(void)
 #if SURFACE_LCD_ENABLE
     if (state->stopping) surface_media_poll(&state->media);
 #endif
+#if SURFACE_LCD_ENABLE && SURFACE_DESKTOP
+    if (!stepped) surface_step(state->shell);
+#else
     surface_step(state->shell);
+#endif
 #if !SURFACE_LCD_ENABLE
     if (!state->stopping) (void)surface_render(state->shell, (tiku_presenter_t){present, state});
 #endif

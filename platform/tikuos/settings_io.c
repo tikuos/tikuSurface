@@ -13,14 +13,20 @@
 #include <string.h>
 static const char name[] = "tikusurface-cal-v1";
 
-int surface_os_settings_read(unsigned char *out, size_t capacity, size_t *length)
+/** @brief Read one product-owned key while the kernel owner is active. */
+static int read_record(const char *key,unsigned char *out,size_t capacity,size_t *length)
 {
     if (!out || !length || !surface_os_in_owner()) return -1;
     tiku_tfs_t *fs = tiku_vfs_tree_data_store();
     if (!fs) return -1;
-    int r = tiku_tfs_read(fs, name, out, capacity, length);
+    int r = tiku_tfs_read(fs, key, out, capacity, length);
     return r == TFS_OK ? 0 : r == TFS_ERR_NOTFOUND ? 1 : -1;
 }
+
+int surface_os_settings_read(unsigned char *out,size_t capacity,size_t *length)
+{return read_record(name,out,capacity,length);}
+int surface_os_preferences_read(unsigned char *out,size_t capacity,size_t *length)
+{return read_record("tikusurface-desk-v1",out,capacity,length);}
 
 int surface_os_settings_write(const unsigned char *data, size_t length)
 {
@@ -50,7 +56,8 @@ static int write_poll(void *context)
     return rc<0 ? TFS_ERR_IO : rc;
 }
 static const tiku_tfs_async_ops_t write_ops={write_begin,write_poll};
-int surface_os_settings_begin(void *bridge,const unsigned char *data,size_t length)
+/** @brief Queue one validated-size record and retain its product-owned key. */
+static int begin_record(void *bridge,const char *key,const unsigned char *data,size_t length)
 {
     if(!bridge || ((uintptr_t)bridge&7u) || !data || length!=32 || !surface_os_in_owner())return -1;
     settings_bridge_t *state=bridge;
@@ -59,9 +66,14 @@ int surface_os_settings_begin(void *bridge,const unsigned char *data,size_t leng
     tiku_tfs_t *fs=tiku_vfs_tree_data_store();
     if(!fs)return -1;
     memcpy(state->record,data,length);
-    state->begun=tiku_tfs_async_begin(fs,&state->file,name,state->record,length,&write_ops,&state->storage)==TFS_OK;
+    state->begun=tiku_tfs_async_begin(fs,&state->file,key,state->record,length,&write_ops,&state->storage)==TFS_OK;
     return state->begun ? 1 : -1;
 }
+int surface_os_settings_begin(void *bridge,const unsigned char *data,size_t length)
+{return begin_record(bridge,name,data,length);}
+int surface_os_preferences_begin(void *bridge,const unsigned char *data,size_t length)
+{return begin_record(bridge,"tikusurface-desk-v1",data,length);}
+
 int surface_os_settings_poll(void *bridge)
 {
     if(!bridge || ((uintptr_t)bridge&7u) || !surface_os_in_owner())return -1;

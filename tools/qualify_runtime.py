@@ -37,15 +37,19 @@ def scalar(reply):
     return values[0]
 
 
-def qualify(command, result, cycles=100, pause=time.sleep, clock=time.monotonic, progress=None, lcd=False, active_seconds=0):
+def qualify(command, result, cycles=100, pause=time.sleep, clock=time.monotonic, progress=None, lcd=False, active_seconds=0, desktop=False):
     """Collect lifecycle, failure, console and timer evidence; leave the runtime stopped."""
     if not 1 <= cycles <= 1000:
         raise ValueError('cycles must be between 1 and 1000')
     if not 0 <= active_seconds <= 28800 or (active_seconds and not lcd):
         raise ValueError('active_seconds requires LCD and must be between 0 and 28800')
+    if desktop and not lcd:
+        raise ValueError('desktop requires LCD qualification')
     result.update(active_seconds=0.0, soak_samples=0)
     result.update(scope='lcd-sustained-lifecycle' if active_seconds else 'lcd-lifecycle' if lcd else 'diagnostic-runtime', touch_qualified=False,
                   physical_latency_qualified=False)
+    if desktop:
+        result['scope'] = 'core-desktop-sustained-lifecycle' if active_seconds else 'core-desktop-lifecycle'
     result.update(passed=False, qualification_complete=False, cycles=0, max_dispatch_us=0, minimum_stack_free=16384,
                   timing_limit_us=5000, transcript=[])
 
@@ -63,8 +67,8 @@ def qualify(command, result, cycles=100, pause=time.sleep, clock=time.monotonic,
     def sample():
         value = status(call('cat /surface/status'))
         result['max_dispatch_us'] = max(result['max_dispatch_us'], value['max_us'])
-        if active_seconds and value['max_us'] > result['timing_limit_us']:
-            raise ValueError('Sustained workload exceeded dispatch limit')
+        if (active_seconds or desktop) and value['max_us'] > result['timing_limit_us']:
+            raise ValueError('Workload exceeded dispatch limit')
         return value
 
     def until(predicate):
@@ -100,10 +104,20 @@ def qualify(command, result, cycles=100, pause=time.sleep, clock=time.monotonic,
 
     try:
         control('fail=0')
+        if desktop:
+            if not sample()['running']:
+                control('start')
+            first = until(lambda s: s['running'] and s['frames'] > 0)
+            completed = display_after(0)
+            for app in (2, 3, 2):
+                control('launch=' + str(app))
+                first = until(lambda s: s['app'] == app and s['frames'] > first['frames'])
+                completed = display_after(completed)
+            result['boot_reactivation_passed'] = True
         stopped()
         baseline = scalar(call('cat /surface/psram_free'))
         result['baseline_psram_free'] = baseline
-        for allocation in range(1, 8 if lcd else 6):
+        for allocation in range(1, 11 if desktop else 8 if lcd else 6):
             control('fail=' + str(allocation))
             control('start', failure=True)
             value = until(lambda s: not s['running'])
@@ -117,7 +131,7 @@ def qualify(command, result, cycles=100, pause=time.sleep, clock=time.monotonic,
             first = until(lambda s: s['running'] and s['frames'] > 0)
             completed = display_after(0) if lcd else 0
             ticks = scalar(call('cat /sys/clock/ticks'))
-            for app in (1, 2, 3, 0):
+            for app in ((2, 3, 0, 2, 3, 2) if desktop else (1, 2, 3, 0)):
                 control('launch=' + str(app))
                 value = until(lambda s: s['app'] == app and s['frames'] > first['frames'])
                 if not lcd and app == 2 and not value['media_unavailable']:

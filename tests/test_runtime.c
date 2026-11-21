@@ -100,15 +100,20 @@ static void lifecycle(void)
         assert(initial.frames == 1 && initial.allocations == 5);
         assert(initial.live_bytes > 1536000 && initial.peak_bytes < sizeof region);
         assert(!surface_runtime_launch(99));
-        for (unsigned id = 1; id <= 3; ++id) {
+        for (unsigned id = 1; id <= 3 + SURFACE_ARITHMETIC; ++id) {
             assert(surface_runtime_launch(id));
             assert(surface_runtime_poll());
             assert(surface_runtime_poll());
+            surface_runtime_stats_t opened = stats();
             assert(surface_runtime_launch(0));
             assert(surface_runtime_poll());
             assert(surface_runtime_poll());
-            assert(stats().live_bytes == initial.live_bytes);
-            assert(stats().allocations == initial.allocations);
+            assert(stats().live_bytes == opened.live_bytes);
+            assert(stats().allocations == opened.allocations);
+            assert(surface_runtime_launch(id));
+            assert(surface_runtime_poll());
+            assert(stats().live_bytes == opened.live_bytes);
+            assert(stats().allocations == opened.allocations);
         }
         clock_step = 6000;
         assert(surface_runtime_poll());
@@ -121,7 +126,10 @@ static void lifecycle(void)
 /** @brief Browser initialization failures leave the shell allocation baseline intact. */
 static void app_failures(void)
 {
-    for (unsigned fail = 1; fail <= 7; ++fail) {
+    assert(surface_runtime_start());unsigned initial=stats().allocations;
+    assert(surface_runtime_launch(2));assert(surface_runtime_poll());
+    unsigned allocations=stats().allocations-initial;stop();
+    for (unsigned fail = 1; fail <= allocations; ++fail) {
         assert(surface_runtime_start());
         unsigned baseline = stats().live_bytes;
         surface_runtime_fail_at(fail);

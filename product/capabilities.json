@@ -43,7 +43,8 @@
         "touch",
         "media",
         "settings",
-        "wifi-transfer-status"
+        "wifi-transfer-status",
+        "transfer-control"
       ]
     },
     "s31-recording": {
@@ -64,7 +65,8 @@
     "added_drom_bytes": 6144,
     "added_sram_bytes_excluding_display_descriptors": 2048,
     "residual_sram_bytes": 4096,
-    "browser_history_pages": 8
+    "browser_history_pages": 8,
+    "open_application_instances": 3
   },
   "host": {
     "status": "implemented",
@@ -75,12 +77,39 @@
     ],
     "input": [
       "primary-pointer",
-      "hexadecimal-keys",
+      "word-digits-for-selected-base",
       "backspace",
       "escape"
     ],
     "presentation": "full-frame XRGB8888",
-    "persistent_settings": false
+    "persistent_settings": false,
+    "application_sessions": {
+      "implemented": true,
+      "home_retains_apps": true,
+      "task_menu": true,
+      "explicit_close": true,
+      "unsaved_settings_confirmation": true,
+      "background_requests_complete": true
+    },
+    "word_calculator": {
+      "word_widths": [
+        8,
+        16,
+        32,
+        64
+      ],
+      "input_bases": [
+        2,
+        8,
+        10,
+        16
+      ],
+      "byte_swap": true,
+      "overflow": "refuse-without-changing-input",
+      "arithmetic": false,
+      "bit_editing": false,
+      "checksums": false
+    }
   },
   "firmware_diagnostic": {
     "profiles": [
@@ -105,7 +134,7 @@
     "touch": true,
     "media_provider": "mounted-native-media-read-only",
     "pixel_budget": 1024,
-    "paint_rows": 4,
+    "paint_rows": 2,
     "hardware_qualified": false,
     "resident_growth_gate": "link-checked",
     "continuation_turn_limit": 32,
@@ -123,6 +152,244 @@
       "provider": "typed-cached-wifi-and-transfer-snapshots",
       "read_only": true,
       "hardware_qualified": false
+    },
+    "transfer_control": {
+      "release_required": true,
+      "implemented": true,
+      "required_actions": [
+        "enable-provisioned-listener",
+        "stop-transfers"
+      ],
+      "credential_entry": false,
+      "owner": "TikuOS transfer service",
+      "build_option": "SURFACE_TRANSFERS=1",
+      "status": "candidate",
+      "hardware_qualified": false,
+      "active_session_stop_confirmation": true,
+      "command_owner": "desktop-shell",
+      "service_owner": "independent-TikuOS-process"
+    }
+  },
+  "desktop_port": {
+    "status": "incomplete",
+    "required_applications": [
+      "tracker",
+      "editor",
+      "calculator",
+      "developer-calculator",
+      "terminal",
+      "device-tools",
+      "reader-help",
+      "basic"
+    ],
+    "implemented_shell": [
+      "retained-application-sessions",
+      "application-menu",
+      "explicit-close",
+      "unsaved-settings-confirmation"
+    ],
+    "missing_shell": [
+      "text-input",
+      "clipboard",
+      "document-handoff"
+    ],
+    "remaining_desktop_applications": "per-application port assessment required"
+  },
+  "development_candidates": {
+    "text_input": {
+      "build_option": "SURFACE_TEXT_INPUT=1",
+      "sdk_requirements": [
+        "text-field-events"
+      ],
+      "status": "host-and-link-checked",
+      "hardware_qualified": false,
+      "features": [
+        "modal-touch-keyboard",
+        "shell-clipboard",
+        "selection",
+        "undo-redo",
+        "word-editing",
+        "bit-editing",
+        "crc32",
+        "crc16"
+      ],
+      "clipboard_bytes": 255,
+      "undo_steps": 4,
+      "checksum_bytes": 64,
+      "checksum_input_characters": 128,
+      "release_pin_adopted": false
+    }
+  },
+  "development_profiles": {
+    "desktop-candidate": {
+      "status": "candidate",
+      "release_qualified": false,
+      "published_sdk_compatible": false,
+      "build_options": {
+        "SURFACE_TEXT_INPUT": 1,
+        "SURFACE_FILE_JOBS": 1,
+        "SURFACE_ARITHMETIC": 1,
+        "SURFACE_CONTENT_JOBS": 1,
+        "SURFACE_EDITOR": 1,
+        "SURFACE_TERMINAL": 1,
+        "SURFACE_FILE_INFO": 1,
+        "SURFACE_BASIC": 1,
+        "SURFACE_DEVICE": 1,
+        "SURFACE_VFS": 1,
+        "SURFACE_READER": 1,
+        "SURFACE_DIRECTORIES": 1,
+        "SURFACE_HEX": 1,
+        "SURFACE_DOCUMENTS": 1,
+        "SURFACE_PREFERENCES": 1,
+        "SURFACE_DIFF": 1,
+        "SURFACE_TRANSFERS": 1,
+        "SURFACE_NOTES": 1,
+        "SURFACE_EDITOR_DOCUMENTS": 1,
+        "SURFACE_EDITOR_LINES": 1,
+        "SURFACE_IMAGE": 1
+      },
+      "applications": [
+        "developer-calculator",
+        "tracker",
+        "settings",
+        "calculator",
+        "editor",
+        "terminal",
+        "device-monitor",
+        "vfs-inspector",
+        "reader",
+        "hex",
+        "diff",
+        "notes",
+        "image"
+      ],
+      "limits": {
+        "open_application_instances": 13,
+        "document_bytes": 8192,
+        "copy_file_bytes": 65536,
+        "runtime_psram_bytes": 11530240,
+        "allocation_records": 160,
+        "added_irom_bytes": 458752,
+        "added_sram_bytes_excluding_display_descriptors": 2048
+      },
+      "desktop_preferences": {
+        "record_bytes": 32,
+        "calibration_record_independent": true,
+        "background_choices": 6,
+        "preferred_handlers": [
+          "text",
+          "html",
+          "markdown"
+        ],
+        "save_interval_us": 5000000
+      },
+      "open_gates": [
+        "physical-display-touch-and-readability",
+        "dispatch-latency-and-endurance",
+        "physical-storage-power-loss",
+        "physical-connected-service-workloads",
+        "remaining-desktop-application-adaptations",
+        "dependency-adoption-and-release"
+      ],
+      "notes": {
+        "documents": 24,
+        "body_bytes": 8192,
+        "quiet_save_us": 500000,
+        "retry_us": 5000000,
+        "papers": 4,
+        "important": true,
+        "native_record_format": true,
+        "baseline_checked_replace_and_delete": true,
+        "retained_typing_during_save": true
+      },
+      "editor_documents": {
+        "documents": 8,
+        "bytes_each": 8192,
+        "history_target_bytes_each": 16384,
+        "existing_path_focus": true,
+        "dirty_close_confirmation": true,
+        "line_commands": [
+          "duplicate",
+          "move-up",
+          "move-down",
+          "delete",
+          "indent",
+          "unindent"
+        ],
+        "indent_spaces": 4
+      },
+      "image": {
+        "formats": [
+          "bmp-uncompressed-24",
+          "bmp-uncompressed-32",
+          "png-grayscale-palette-1-2-4-8",
+          "png-rgb-gray-alpha-rgba-8",
+          "png-adam7"
+        ],
+        "encoded_bytes": 1048576,
+        "decoded_pixels": 131072,
+        "dimension_limit": 512,
+        "decode_and_render_pixels_per_turn": 256,
+        "viewport": [
+          640,
+          224
+        ],
+        "watch_us": 2000000,
+        "failed_replacement_keeps_image": true,
+        "physical_qualification": false,
+        "pending_formats": [
+          "jpeg"
+        ],
+        "png_work_units_per_turn": 256
+      }
+    },
+    "core-desktop": {
+      "status": "candidate",
+      "release_qualified": false,
+      "published_sdk_compatible": false,
+      "build_options": {
+        "SURFACE_DESKTOP": 1,
+        "SURFACE_TEXT_INPUT": 1,
+        "SURFACE_FILE_JOBS": 1,
+        "SURFACE_CONTENT_JOBS": 1,
+        "SURFACE_FILE_INFO": 1,
+        "SURFACE_DIRECTORIES": 1
+      },
+      "applications": [
+        "tracker",
+        "settings"
+      ],
+      "sdk_requirements": [
+        "window-workspace",
+        "deskbar-paint"
+      ],
+      "limits": {
+        "open_application_instances": 2,
+        "browser_visible_rows": 8,
+        "copy_file_bytes": 65536,
+        "relative_path_bytes": 63,
+        "runtime_psram_bytes": 3928064,
+        "added_irom_bytes": 229376,
+        "added_sram_bytes_excluding_display_descriptors": 2048,
+        "paint_rows": 4,
+        "conversion_pixels": 4096,
+        "cpu_mhz": 160,
+        "continuation_burst_us": 20000,
+        "continuation_turn_limit": 64
+      },
+      "features": [
+        "retained-overlapping-windows",
+        "native-window-controls",
+        "deskbar-task-and-window-rows",
+        "writable-tracker",
+        "persistent-calibration"
+      ],
+      "open_gates": [
+        "physical-display-touch-and-readability",
+        "dispatch-latency-and-endurance",
+        "physical-storage-power-loss",
+        "dependency-adoption-and-release"
+      ]
     }
   }
 }

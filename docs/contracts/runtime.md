@@ -15,14 +15,28 @@ status and leaves navigation available.
 ## Application and input lifetime
 
 Applications use Stomme's static lifecycle owner and a four-entry input queue.
-The product has one foreground slot, one retirement slot and one pending
-application ID. A navigation request invalidates queued shell input and the
-pressed control. The next owner turn stops the foreground application.
+The product retains one instance of each of its three applications, with one
+foreground slot, one retirement slot and one pending application ID. Home and
+application switching background the current owner through Stomme's visibility
+API. Background applications retain their state and accepted requests; their
+input queues are cleared. Browser and settings completion polling continues.
 
-Home displays the launcher while the old application retires. A launch waits
-for that retirement slot to empty; repeated requests replace the pending ID.
-Home also cancels a pending launch. Invalid application IDs are refused.
-Allocation/start failure leaves the launcher usable and reports the failure.
+Applications opens the task menu, which lists available applications and marks
+open instances. Selecting an open application restores it without allocating
+another instance. A navigation request invalidates queued shell/app input and
+the pressed control. Repeated requests replace the pending ID. A closed browser
+cannot reopen until its old request retires; other applications remain reachable.
+Home cancels a pending launch. Invalid application IDs are refused. Failed starts
+leave existing background applications intact and report failure on Home.
+
+Close stops the foreground owner and retains its buffers until completion.
+Unsaved settings open a modal Keep editing / Discard decision; Escape keeps
+editing. Launch requests and underlying controls are refused during this decision.
+Pending settings saves cannot be closed. Acknowledgement is polled even while
+settings are in the background. Home and switching preserve an unsaved draft.
+Opening the application menu cancels an armed control and consumes modal input.
+The menu accepts keys 1 through 3 and Escape; it does not forward those keys to
+the foreground application. Closing an application removes it from the task list.
 
 Pointer actions activate on release inside the armed control. Dragging out,
 focus loss and queue overflow cancel the pressed control. Queue overflow
@@ -30,9 +44,15 @@ also cancels queued application input. Escape performs Back: browser file
 previews return to their directory, directories return to their parent, and
 the root/application views return to the launcher.
 
-The calculator accepts up to 16 hexadecimal digits and presents the unsigned
-64-bit value in hexadecimal, decimal, octal and binary. Backspace erases a
-digit; X and the Clear button erase the word. The device-information view
+The word calculator accepts unsigned 8-, 16-, 32- and 64-bit values in hexadecimal,
+decimal, octal or binary. Width cycles from 64 to 8, 16, 32 and back to 64;
+narrowing that cannot represent the value is refused. Input radix cycles from
+hexadecimal to decimal, octal and binary while preserving the word. Swap bytes
+uses the selected width. The four result fields show the value in each radix.
+Invalid digits, overflow and overlong entries leave the input unchanged. Entry
+length is bounded by the digit capacity of the selected width and radix.
+Backspace erases a digit; X and the Clear button erase the word. The view's
+`hex` field carries the input in its selected radix. The device-information view
 reports the configured platform capabilities and edits touch orientation.
 Save queues the calibration record through the configured settings provider.
 The active mapping changes after successful completion; failed saves retain
@@ -88,9 +108,10 @@ paints full frames; damage accumulation and bounded hardware publication are
 separate adapter requirements.
 
 `surface_stop()` abandons partial painting, closes input, cancels pending
-navigation and stops the app.
+navigation and stops foreground and background applications. This runtime teardown
+discards unsaved in-memory drafts; the interactive Close path handles decisions.
 Input and launch requests are refused afterward. Continue provider completions
 and owner turns until retirement ends. `surface_destroy()` refuses a live app
 lease or in-flight frame and leaves its pointer intact. It releases the shell
-after both providers have returned ownership. A provider that never completes
+after providers have returned ownership. A provider that never completes
 keeps its memory retained; shutdown does not free its buffers prematurely.

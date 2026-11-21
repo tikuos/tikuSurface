@@ -91,3 +91,7 @@ test-nvm-backend:
 test-services: sdk-host
 	$(MAKE) -f mk/tikuos-test.mk services-test
 	TIKUOS_ROOT="$(TIKUOS_ROOT)" $(PYTHON) tests/tikuos/test_radio_image.py
+
+.PHONY: test-cpu-clock
+test-cpu-clock:
+	TIKUOS_ROOT="$(TIKUOS_ROOT)" $(PYTHON) tests/tikuos/test_cpu_clock.py

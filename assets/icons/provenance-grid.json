@@ -1,0 +1,98 @@
+{
+  "format": "premultiplied ARGB8888, 32x32",
+  "renderer_revision": "6f67e29a42b6f8e65e45b228ba8748039071c200",
+  "icons": [
+    {
+      "name": "app_devcalc",
+      "source": "kits/translation/tiku_icons_app_devcalc.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "2b604f43c70ab081a731978eb26ec97b8ea21068aedf6813d968710753115a4e",
+      "raster_sha256": "b863929907140d3b4f2410f635320cbe5ef03f0b40a34cbcebca6340f9f6dd7c"
+    },
+    {
+      "name": "compare_folders",
+      "source": "kits/translation/tiku_icons_utils.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "4d883787db1278d518387889e7af60390294880f2c47972125885b3c29620e23",
+      "raster_sha256": "6ee44baaaf2caad05fe062e4528d176c1f528e314bec745a8b5e0ffa9de2598c"
+    },
+    {
+      "name": "section_identity",
+      "source": "kits/translation/tiku_icons_section_identity.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "10e6c1926503576917f482bbc35107c0ecfed60c6e591d1731dc5c94aedf9aca",
+      "raster_sha256": "ac046699c118858cc3bb5a545516ef0a5bbb2a6bc3a17d6221e367c86c3daef3"
+    },
+    {
+      "name": "calculator",
+      "source": "kits/translation/tiku_icons_calculator.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "338aa0462087d5e81d4dd61b9205adc9b9981b8d16f6c76aab83be4cfd56cb8c",
+      "raster_sha256": "6953234fff96383ccf37e61506d81cf1370009da5a8b75506768badc3d7a5b24"
+    },
+    {
+      "name": "editor",
+      "source": "kits/translation/tiku_icons_editor.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "4c18b64b04939b359bc8d5c1d3c51a3158ac108e71804e12c1a19924f5aba1f2",
+      "raster_sha256": "74b52885ff26e6026773183cf5ea669a2e7045106e28a674be140a8f417f8dba"
+    },
+    {
+      "name": "terminal",
+      "source": "kits/translation/tiku_icons_terminal.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "1b11e82743bab413240a6e5081da5d4b9f71dd79fa5b3db2d358ee041ad078c0",
+      "raster_sha256": "e72ce824f51f9ad55cc2ed622512f2da98c9a8bd9121452a6d642e7cf3c65824"
+    },
+    {
+      "name": "tool_monitor",
+      "source": "kits/translation/tiku_icons_tool_monitor.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "946706407ab7f55179197ae2691efb8189c192550a4e8185a12141be1fcfb216",
+      "raster_sha256": "a3a45c7b601940e77049949a916c412f68d8d7f7f0a19b4871930567783b93e6"
+    },
+    {
+      "name": "tool_inspector",
+      "source": "kits/translation/tiku_icons_tool_inspector.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "4882a9743d0214cdc9b9ddf843b22a0042dfa39b35f9c306e2b58032530abb36",
+      "raster_sha256": "52861f438dd3ad1272bafb48511dcf52b77db6f3d03b6bf261739975c5ba274c"
+    },
+    {
+      "name": "reader",
+      "source": "kits/translation/tiku_icons_reader.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "9de9cc3fd603cd0ce7d522e2a586c6f626513199142a33711f749d10c6093045",
+      "raster_sha256": "aeed2f046cc1d540d50bf4980feaa0501e154550c5b41a019ceed58171b3b4d5"
+    },
+    {
+      "name": "tool_hex",
+      "source": "kits/translation/tiku_icons_tool_hex.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "65adde3d2ee9a04ad7ca0af66f4e7544c6fb5eadf424e68295a8bfe3f09fc54e",
+      "raster_sha256": "9893b2d60bb2b101def7219e98d0a3f48566add7227c1a023bae328712c52fdb"
+    },
+    {
+      "name": "diff_viewer",
+      "source": "kits/translation/tiku_icons_utils.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "39845b7a8564342dd06b9637143dd79319b477c4f6330b60a8a3b0bbf5a1a444",
+      "raster_sha256": "e0e06fa35966b9ab450f148da909233d43fab4d88b0a58833d2260f18e35f7ae"
+    },
+    {
+      "name": "app_notes",
+      "source": "kits/translation/tiku_icons_app_notes.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "e99f0faec8394336cda2527597d28d8dda5d84a9b1775b93ce4eff7a11739b5b",
+      "raster_sha256": "8f93b09188aa2ba9876f85082647b6ff981a6c9fb483f38263ec636db8c6ab02"
+    },
+    {
+      "name": "image_viewer",
+      "source": "kits/translation/tiku_icons_viewer.inl",
+      "revision": "6622c2a49225af5fba3e928e46e70069d86c6491",
+      "blob_sha256": "db7fd9658fa7b27b1dbde606e99d7bd928a6c49bfaea5294b9c00e0df7302d95",
+      "raster_sha256": "79cded870da1ecabefd60fe4cf3c7c07305c2424baae08cd0123978358352993"
+    }
+  ],
+  "width": 32
+}

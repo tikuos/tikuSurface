@@ -30,9 +30,9 @@ NVM_FLASH_SECTIONS = {
     'tiku_libc_heap.o': ('.text.__assert_func',),
 }
 MEDIA_FLASH_SECTIONS = {
-    'tiku_mfs.o': ('.text.tiku_mfs_query*', '.text.query_*', '.text.catalog_decode*', '.text.node_decode*',
+    'tiku_mfs.o': ('.text.tiku_mfs_mutation*', '.text.mutation_*', '.text.tiku_mfs_checkpoint_*', '.text.checkpoint_done*', '.text.tiku_mfs_delete_version', '.text.tiku_mfs_query*', '.text.query_*', '.text.catalog_decode*', '.text.node_decode*',
                    '.text.frame_header_decode*', '.text.frame_footer_decode*'),
-    'tiku_media_card.o': ('.text.tiku_media_card_read_*', '.text.read_acquire', '.text.read_sector',
+    'tiku_media_card.o': ('.text.tiku_media_card_mutation_*', '.text.mutation_*', '.text.tiku_media_card_read_*', '.text.read_acquire', '.text.read_sector',
                          '.text.read_poll', '.text.read_close'),
 }
 TIER_FLASH_SECTIONS = ('.text.work*', '.text.record*', '.text.create_check',
@@ -79,7 +79,7 @@ def validate(final, inputs):
     for name in RESIDENT + tuple(n for n in ('tiku_s31_settings_io', 'tiku_s31_settings_context') if n in final):
         if name not in final or not SRAM[0] <= final[name]['address'] < SRAM[1]:
             errors.append('Resident symbol outside SRAM: ' + name)
-    for name in ('__surface_irom_start', '__surface_irom_end', '__tier_sram_start', '__tier_sram_end'):
+    for name in ('__surface_irom_start', '__surface_irom_end', '__tier_sram_start', '__tier_sram_end', '__tiku_s31_irom_end'):
         if name not in final:
             errors.append('Missing linker bound: ' + name)
     if errors:
@@ -90,13 +90,38 @@ def validate(final, inputs):
     observation = final.get('tiku_wireless_observe')
     if observation and not IROM[0] <= observation['address'] < observation['address'] + observation['size'] <= IROM[1]:
         raise ValueError('Radio observation outside IROM')
+    if 'surface_os_console_open' in final:
+        for name in ('tiku_console_inject', 'tiku_console_inject_clear'):
+            value = final.get(name)
+            if not value or not IROM[0] <= value['address'] < value['address'] + value['size'] <= IROM[1]:
+                raise ValueError('Console foreground helper outside IROM: ' + name)
+    if 'surface_os_program_start' in final:
+        for name in ('tiku_basic_job_start_owned', 'tiku_basic_job_stop_owned', 'strcspn'):
+            value = final.get(name)
+            if not value or not IROM[0] <= value['address'] < value['address'] + value['size'] <= IROM[1]:
+                raise ValueError('BASIC foreground helper outside IROM: ' + name)
+    if 'surface_os_device_read' in final:
+        value = final.get('tiku_vfs_read_passive')
+        if not value or not IROM[0] <= value['address'] < value['address'] + value['size'] <= IROM[1]:
+            raise ValueError('Device foreground helper outside IROM')
+    if 'surface_os_vfs_list' in final:
+        value = final.get('tiku_vfs_child_at')
+        if not value or not IROM[0] <= value['address'] < value['address'] + value['size'] <= IROM[1]:
+            raise ValueError('VFS foreground helper outside IROM')
+    arithmetic = final.get('__floatdisf')
+    if arithmetic and not IROM[0] <= arithmetic['address'] < arithmetic['address'] + arithmetic['size'] <= IROM[1]:
+        raise ValueError('Workspace arithmetic outside IROM')
     ui_bytes = final['__surface_irom_end']['address'] - final['__surface_irom_start']['address']
     tier_bytes = final['__tier_sram_end']['address'] - final['__tier_sram_start']['address']
-    if ui_bytes <= 0 or ui_bytes > 196608:
+    ui_budget = 458752 if 'tiku_edit_lines' in final else 393216 if 'surface_diff_start' in final else 327680 if 'surface_reader_start' in final else 262144 if 'surface_editor_start' in final else 229376 if 'surface_desktop_create' in final else 196608
+    image_free = IROM[1] - final['__tiku_s31_irom_end']['address']
+    if image_free < 65536:
+        raise ValueError('Whole-image IROM reserve below 65536 bytes')
+    if ui_bytes <= 0 or ui_bytes > ui_budget:
         raise ValueError('UI IROM budget exceeded or empty')
     if tier_bytes < 90112 + 6112 + 4096:
         raise ValueError('SRAM admission below radio/display/residual reservation')
-    return {'ui_irom_bytes': ui_bytes, 'sram_tier_bytes': tier_bytes,
+    return {'ui_irom_bytes': ui_bytes, 'ui_irom_budget_bytes': ui_budget, 'image_irom_free_bytes': image_free, 'sram_tier_bytes': tier_bytes,
             'residual_after_radio_and_display': tier_bytes - 90112 - 6112,
             'ui_symbols': checked, 'resident_symbols': {n: final[n] for n in RESIDENT}}
 

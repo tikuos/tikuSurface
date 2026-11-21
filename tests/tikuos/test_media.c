@@ -5,8 +5,13 @@
  */
 #include "media.h"
 #include "host.h"
+#if SURFACE_CONTENT_JOBS
+#include "surface_internal.h"
+#endif
+#include "tiku_event.h"
 #include <services/storage/tiku_media_card.h>
 #include <services/storage/tiku_media_async.h>
+#include <services/storage/tiku_media_mutation.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +77,57 @@ int tiku_media_card_read_step(void *ctx,tiku_media_store_t *s)
 int tiku_media_card_read_idle(const void *ctx) { return !((const read_state_t *)ctx)->queue.phase; }
 int tiku_media_card_read_cancel(void *ctx,tiku_media_store_t *s,tiku_media_request_t *request)
 { return tiku_media_async_cancel(&((read_state_t *)ctx)->queue,s,request); }
+/** @brief Delayed mutation transport and caller-owned opaque core state. */
+typedef struct {
+    tiku_media_mutation_t queue;
+    uint64_t lba;
+    void *buffer;
+    unsigned opened, pending, wait;
+} write_state_t;
+/** @brief Acquire a delayed simulated write session. */
+static int acquire_write(void *ctx,void *backend)
+{ (void)backend;write_state_t *w=ctx;assert(!w->opened);w->opened=1;w->pending=1;w->wait=1;return 1; }
+/** @brief Borrow one read/write sector until a later completion. */
+static int write_io(write_state_t *w,uint64_t lba,void *p,unsigned kind)
+{ assert(w->opened&&!w->pending);w->lba=lba;w->buffer=p;w->pending=kind;w->wait=1;return 1; }
+/** @brief Queue a read under the mutation session. */
+static int mutation_read_sector(void *ctx,uint64_t lba,void *p){return write_io(ctx,lba,p,2);}
+/** @brief Queue a write under the mutation session. */
+static int mutation_write_sector(void *ctx,uint64_t lba,const void *p){return write_io(ctx,lba,(void *)p,3);}
+/** @brief Queue an ordered metadata barrier. */
+static int mutation_sync_sector(void *ctx){return write_io(ctx,0,NULL,4);}
+/** @brief Retire one delayed operation and release failed sessions. */
+static int poll_write(void *ctx)
+{
+    write_state_t *w=ctx;assert(w->opened&&w->pending);
+    if(w->wait-- > 0)return 1;
+    int rc=w->pending==2?read_disk(NULL,w->lba,1,w->buffer):
+        w->pending==3?write_disk(NULL,w->lba,1,w->buffer):w->pending==4?sync_disk(NULL):0;
+    w->pending=0;w->buffer=NULL;if(rc)w->opened=0;return rc?TIKU_MFS_IO:0;
+}
+/** @brief Preserve the write owner through refused cancellation. */
+static int close_write(void *ctx)
+{
+    write_state_t *w=ctx;assert(w->opened);
+    if(close_refusals){--close_refusals;return TIKU_MFS_BUSY;}
+    w->opened=w->pending=0;w->buffer=NULL;return 0;
+}
+/** @brief Align trailing core state independently of the host ABI. */
+static size_t write_offset(void){return (sizeof(write_state_t)+7u)&~(size_t)7u;}
+size_t tiku_media_card_mutation_size(void){return write_offset()+tiku_mfs_mutation_size();}
+void tiku_media_card_mutation_init(void *ctx)
+{
+    static const tiku_media_mutation_ops_t ops={acquire_write,mutation_read_sector,mutation_write_sector,
+        mutation_sync_sector,poll_write,close_write};
+    write_state_t *w=ctx;memset(w,0,sizeof *w);
+    tiku_mfs_mutation_t *m=tiku_mfs_mutation_init((unsigned char *)ctx+write_offset(),tiku_mfs_mutation_size());assert(m);
+    tiku_media_mutation_init(&w->queue,m,&ops,w);
+}
+int tiku_media_card_mutation_step(void *ctx,tiku_media_store_t *s)
+{ write_state_t *w=ctx;unsigned before=reads;int rc=tiku_media_mutation_step(&w->queue,s);assert(reads-before<=1);return rc; }
+int tiku_media_card_mutation_idle(const void *ctx){return !((const write_state_t *)ctx)->queue.phase;}
+int tiku_media_card_mutation_cancel(void *ctx,tiku_media_store_t *s,tiku_media_request_t *r)
+{ return tiku_media_mutation_cancel(&((write_state_t *)ctx)->queue,s,r); }
 /** @brief Settle application/provider work under a fixed queue-step ceiling. */
 static void settle(surface_t *shell,surface_media_t *media)
 {
@@ -293,6 +349,248 @@ static void epoch_contract(void)
     reset(); assert(tiku_mfs_names_epoch(&fs)!=version);
 }
 /** @brief Exercise 4096 descendants, bounded skipping, page progress, reads and cancellation. */
+/** @brief Complete a neutral bridge request without a synchronous store step. */
+static void bridge_drain(void *bridge)
+{ for(unsigned n=0;!surface_os_media_poll(bridge);++n)assert(n<30000); }
+/** @brief Resolve file IDs, rename/delete and retire cancelled product requests. */
+static void bridge_mutations(void)
+{
+    reset();file("before");void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);
+    surface_media_io_t io={.operation=SURFACE_MEDIA_ENUMERATE};
+    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);bridge_drain(bridge);
+    assert(io.result==SURFACE_MEDIA_OK&&io.id&&!strcmp(io.found,"before"));uint64_t id=io.id;
+    io=(surface_media_io_t){.operation=SURFACE_MEDIA_RENAME,.id=id};strcpy(io.name,"before");strcpy(io.destination,"after");
+    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);bridge_drain(bridge);assert(io.result==SURFACE_MEDIA_OK);
+    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);bridge_drain(bridge);assert(io.result==SURFACE_MEDIA_STALE);
+    io.operation=SURFACE_MEDIA_DELETE;strcpy(io.name,"after");
+    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);bridge_drain(bridge);assert(io.result==SURFACE_MEDIA_OK);
+    tiku_mfs_object_t info;assert(tiku_mfs_stat(&fs,"after",&info)==TIKU_MFS_NOENT);
+    file("cancel");assert(!tiku_mfs_stat(&fs,"cancel",&info));io.id=info.id;io.epoch=0;strcpy(io.name,"cancel");
+    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);
+    for(unsigned n=0;n<12;++n)assert(!surface_os_media_poll(bridge));
+    close_refusals=2;assert(!surface_os_media_cancel(bridge));assert(!surface_os_media_cancel(bridge));
+    assert(surface_os_media_cancel(bridge));bridge_drain(bridge);assert(io.result==SURFACE_MEDIA_STALE&&!store.count&&!store.running);
+    assert(!fs.failed&&!tiku_mfs_stat(&fs,"cancel",&info));free(bridge);
+}
+
+#if SURFACE_FILE_JOBS
+/** @brief Send one pointer click through the shell's ordinary input queue. */
+static void file_tap(surface_t *shell,surface_media_t *media,int x,int y)
+{
+    tiku_input_event_t e={.type=TIKU_EVENT_POINTER_DOWN,.button=1,.x=x,.y=y};assert(surface_post(shell,&e));
+    e.type=TIKU_EVENT_POINTER_UP;assert(surface_post(shell,&e));surface_step(shell);surface_media_poll(media);
+}
+/** @brief Replace a filename draft using shared field selection and commit input. */
+static void file_name(surface_t *shell,const char *name)
+{
+    tiku_input_event_t e={.type=TIKU_EVENT_KEY_DOWN,.key='a',.modifiers=TIKU_MOD_CMD};assert(surface_post(shell,&e));
+    e=(tiku_input_event_t){.type=TIKU_EVENT_KEY_DOWN};assert(strlen(name)<sizeof e.text);strcpy(e.text,name);assert(surface_post(shell,&e));
+    e=(tiku_input_event_t){.type=TIKU_EVENT_KEY_DOWN,.key=TIKU_KEY_RETURN};assert(surface_post(shell,&e));surface_step(shell);
+}
+/** @brief Capture an accepted candidate frame when an evidence directory is supplied. */
+static void file_capture(surface_t *shell,surface_host_t *host,const char *name)
+{
+    const char *directory=getenv("SURFACE_MEDIA_CAPTURE_DIR");if(!directory)return;
+    char path[512];assert(snprintf(path,sizeof path,"%s/%s.ppm",directory,name)<(int)sizeof path);
+    assert(surface_render(shell,surface_host_presenter(host))==TIKU_PRESENT_OK);
+    assert(surface_host_capture(host,path));host->now=host->frame_due;surface_host_poll(host);
+}
+/** @brief Run rename and confirmed deletion through visible browser controls. */
+static void tracker_actions(void)
+{
+    reset();file("before");surface_host_t host;surface_config_t cfg=surface_host_config(&host);
+    void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);surface_media_t media;
+    cfg.storage=surface_media_init(&media,bridge);
+    cfg.caller=(tiku_resource_caller_t){.principal="surface-local",.authenticated=1,.scopes=TIKU_RESOURCE_READ|TIKU_RESOURCE_WRITE};
+    surface_t *shell=surface_create(&cfg);assert(shell&&surface_launch(shell,SURFACE_BROWSER));settle(shell,&media);
+    file_tap(shell,&media,70,130);settle(shell,&media);surface_view_t v;surface_view(shell,&v);assert(v.reading&&v.file_actions);file_capture(shell,&host,"preview");
+    file_tap(shell,&media,460,410);surface_view(shell,&v);assert(v.text_entry&&!strcmp(v.text_value,"/before"));file_capture(shell,&host,"rename");
+    assert(!surface_launch(shell,SURFACE_HOME));file_name(shell,"/../bad");surface_view(shell,&v);assert(v.text_entry&&v.text_error);
+    file_name(shell,"/after");settle(shell,&media);surface_view(shell,&v);
+    assert(!v.reading&&!v.text_entry&&v.row_count==1&&!strcmp(v.rows[0],"after"));
+    file_tap(shell,&media,70,130);settle(shell,&media);file_tap(shell,&media,460,410);file_name(shell,"/stop");
+    assert(surface_close(shell)==SURFACE_CLOSE_ACCEPTED);settle(shell,&media);surface_view(shell,&v);assert(!v.retiring);
+    tiku_mfs_object_t kept;assert(!tiku_mfs_stat(&fs,"after",&kept));
+    assert(surface_launch(shell,SURFACE_BROWSER));settle(shell,&media);
+    file_tap(shell,&media,70,130);settle(shell,&media);file_tap(shell,&media,660,410);surface_view(shell,&v);
+    assert(v.close_confirmation==2&&!surface_launch(shell,SURFACE_HOME)&&surface_close(shell)==SURFACE_CLOSE_CONFIRM);file_capture(shell,&host,"delete");
+    assert(surface_resolve_close(shell,0));tiku_mfs_object_t o;assert(!tiku_mfs_stat(&fs,"after",&o));
+    file_tap(shell,&media,660,410);assert(surface_resolve_close(shell,1));settle(shell,&media);surface_view(shell,&v);
+    assert(v.foreground==SURFACE_BROWSER&&!v.reading&&!v.row_count&&!v.close_confirmation);
+    assert(tiku_mfs_stat(&fs,"after",&o)==TIKU_MFS_NOENT);
+    surface_stop(shell);for(unsigned i=0;i<30000&&!surface_destroy(&shell);++i){surface_step(shell);surface_media_poll(&media);}
+    assert(!shell&&!host.memory.live&&!store.count&&!store.running);free(bridge);
+}
+/** @brief Exercise shared SDK writes, destination conflicts and stale resolved identities. */
+static void sdk_mutations(void)
+{
+    reset();file("a");file("b");surface_host_t host;surface_config_t cfg=surface_host_config(&host);
+    void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);surface_media_t media;
+    tiku_storage_provider_t provider=surface_media_init(&media,bridge);
+    tiku_resource_caller_t caller={.principal="surface-local",.authenticated=1,.scopes=TIKU_RESOURCE_WRITE|TIKU_RESOURCE_READ};
+    tiku_paged_storage_t *owner=tiku_paged_storage_create(cfg.allocator,provider,&caller,16,1024);assert(owner);
+    assert(tiku_paged_storage_list(owner,"/",0,0)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    size_t count;uint64_t epoch;int eof;const tiku_storage_request_t *r=tiku_paged_storage_result(owner,&count,&epoch,&eof);
+    assert(r&&count==2);uint64_t node=r->entries[0].node_id;
+    assert(tiku_paged_storage_rename(owner,"/a",epoch,node,"/c")==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_OK);tiku_mfs_object_t o;
+    assert(!tiku_mfs_stat(&fs,"c",&o)&&tiku_mfs_stat(&fs,"a",&o)==TIKU_MFS_NOENT);
+    assert(tiku_paged_storage_delete(owner,"/c",epoch,node)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_STALE_CURSOR);
+    assert(tiku_paged_storage_list(owner,"/",0,0)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    r=tiku_paged_storage_result(owner,&count,&epoch,&eof);assert(r&&count==2);node=r->entries[1].node_id;
+    assert(tiku_paged_storage_rename(owner,"/c",epoch,node,"/b")==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_BUSY);
+    assert(tiku_paged_storage_rename(owner,"/c",epoch,node,"/../bad")==TIKU_RESOURCE_DENIED);
+    assert(tiku_paged_storage_delete(owner,"/c",epoch,node)==TIKU_RESOURCE_PENDING);
+    while(media.phase!=5)surface_media_poll(&media);
+    file("changed");drain(&media,owner,0);assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_STALE_CURSOR);
+    assert(!tiku_mfs_stat(&fs,"c",&o));
+    assert(tiku_paged_storage_list(owner,"/",0,0)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    r=tiku_paged_storage_result(owner,&count,&epoch,&eof);assert(r&&count==3);node=r->entries[1].node_id;
+    assert(!strcmp(r->entries[1].path,"/c"));
+    assert(tiku_paged_storage_delete(owner,"/c",epoch,node)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_OK&&tiku_mfs_stat(&fs,"c",&o)==TIKU_MFS_NOENT);
+    tiku_paged_storage_close(owner);assert(tiku_paged_storage_destroy(&owner));caller.scopes=TIKU_RESOURCE_READ;
+    owner=tiku_paged_storage_create(cfg.allocator,provider,&caller,1,1);assert(owner);
+    assert(tiku_paged_storage_delete(owner,"/b",fs.names_epoch,1)==TIKU_RESOURCE_DENIED);
+    tiku_paged_storage_close(owner);assert(tiku_paged_storage_destroy(&owner));assert(!host.memory.live);free(bridge);
+}
+#endif
+
+#if SURFACE_CONTENT_JOBS
+/** @brief Create and replace bytes through the SDK, preserving guards and leases. */
+static void sdk_contents(void)
+{
+    reset();surface_host_t host;surface_config_t cfg=surface_host_config(&host);
+    void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);surface_media_t media;
+    tiku_storage_provider_t provider=surface_media_init(&media,bridge);
+    tiku_resource_caller_t caller={.principal="surface-local",.authenticated=1,.scopes=TIKU_RESOURCE_WRITE|TIKU_RESOURCE_READ};
+    tiku_paged_storage_t *owner=tiku_paged_storage_create(cfg.allocator,provider,&caller,16,1024);assert(owner);
+    assert(tiku_paged_storage_list(owner,"/",0,0)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    size_t count;uint64_t epoch;int eof;assert(tiku_paged_storage_result(owner,&count,&epoch,&eof)&&!count&&epoch);
+    static unsigned char data[65536],readback[65536];for(unsigned i=0;i<sizeof data;++i)data[i]=(unsigned char)(i*29+1);
+    assert(tiku_paged_storage_replace(owner,"/new",epoch,0,data,65537)==TIKU_RESOURCE_LIMIT);
+    assert(tiku_paged_storage_replace(owner,"/new",epoch,0,data,sizeof data)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_result(owner,&count,&epoch,&eof)&&count==sizeof data&&eof);
+    uint64_t reader;assert(!tiku_mfs_open_read(&fs,"new",&reader));
+    assert(tiku_paged_storage_replace(owner,"/new",epoch,0,"x",1)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_BUSY);
+    assert(tiku_paged_storage_replace(owner,"/new",epoch,1,"abc",3)==TIKU_RESOURCE_PENDING);drain(&media,owner,0);
+    assert(tiku_paged_storage_result(owner,&count,&epoch,&eof)&&count==3);
+    assert(tiku_mfs_read_at(&fs,reader,0,readback,sizeof readback)==sizeof readback&&!memcmp(data,readback,sizeof data));assert(!tiku_mfs_close_read(&fs,reader));
+    assert(tiku_paged_storage_replace(owner,"/new",epoch,1,"late",4)==TIKU_RESOURCE_PENDING);
+    for(unsigned n=0;media.phase!=5 || media.pending;++n){assert(n<30000);surface_media_poll(&media);}
+    file("other");drain(&media,owner,0);assert(tiku_paged_storage_status(owner)==TIKU_RESOURCE_STALE_CURSOR);
+    assert(tiku_paged_storage_replace(owner,"/new",fs.names_epoch,1,data,sizeof data)==TIKU_RESOURCE_PENDING);
+    for(unsigned i=0;i<40;++i)surface_media_poll(&media);
+    close_refusals=3;tiku_paged_storage_cancel(owner);assert(tiku_paged_storage_pending(owner));
+    tiku_paged_storage_close(owner);assert(!tiku_paged_storage_destroy(&owner));drain(&media,owner,0);
+    assert(tiku_paged_storage_destroy(&owner));close_refusals=0;
+    tiku_mfs_object_t o;assert(!tiku_mfs_stat(&fs,"new",&o)&&o.length==3);
+    caller.scopes=TIKU_RESOURCE_READ;owner=tiku_paged_storage_create(cfg.allocator,provider,&caller,1,1);assert(owner);
+    assert(tiku_paged_storage_replace(owner,"/deny",fs.names_epoch,0,"x",1)==TIKU_RESOURCE_DENIED);
+    tiku_paged_storage_close(owner);assert(tiku_paged_storage_destroy(&owner)&&!host.memory.live);free(bridge);
+}
+/** @brief Create an empty file from the visible folder and reject collisions. */
+static void tracker_create(void)
+{
+    reset();surface_host_t host;surface_config_t cfg=surface_host_config(&host);
+    void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);surface_media_t media;
+    cfg.storage=surface_media_init(&media,bridge);
+    cfg.caller=(tiku_resource_caller_t){.principal="surface-local",.authenticated=1,.scopes=TIKU_RESOURCE_READ|TIKU_RESOURCE_WRITE};
+    surface_t *shell=surface_create(&cfg);assert(shell&&surface_launch(shell,SURFACE_BROWSER));settle(shell,&media);
+    surface_view_t v;surface_view(shell,&v);assert(v.file_create&&!v.row_count);
+    file_tap(shell,&media,300,410);surface_view(shell,&v);assert(v.text_entry&&v.file_dialog==2&&!strcmp(v.text_value,"/new"));
+    file_capture(shell,&host,"new-file");file_name(shell,"/../bad");surface_view(shell,&v);assert(v.text_entry&&v.text_error);
+    file_name(shell,"/note");settle(shell,&media);surface_view(shell,&v);assert(v.row_count==1&&!strcmp(v.rows[0],"note")&&v.file_create);
+    tiku_mfs_object_t o;assert(!tiku_mfs_stat(&fs,"note",&o)&&!o.length);uint64_t id=o.id;
+    file_tap(shell,&media,300,410);file_name(shell,"/note");settle(shell,&media);surface_view(shell,&v);assert(v.status==TIKU_RESOURCE_BUSY);
+    assert(!tiku_mfs_stat(&fs,"note",&o)&&o.id==id);
+    file_tap(shell,&media,70,410);settle(shell,&media);file_tap(shell,&media,300,410);file_name(shell,"/stop");
+    assert(surface_close(shell)==SURFACE_CLOSE_ACCEPTED);settle(shell,&media);assert(tiku_mfs_stat(&fs,"stop",&o)==TIKU_MFS_NOENT);
+    surface_stop(shell);for(unsigned i=0;i<30000&&!surface_destroy(&shell);++i){surface_step(shell);surface_media_poll(&media);}
+    assert(!shell&&!host.memory.live&&!store.count&&!store.running);free(bridge);
+}
+/** @brief Copy binary content, refuse oversized inputs and preserve cancellation ownership. */
+static void tracker_copy(void)
+{
+    static unsigned char payload[65537],out[65536];
+    for(unsigned i=0;i<sizeof payload;++i)payload[i]=(unsigned char)(i*19+i/251);
+    const unsigned sizes[]={0,1,1024,4097,65536,65537};
+    for(unsigned scenario=0;scenario<13;++scenario){
+        unsigned bytes=scenario<6?sizes[scenario]:4097;
+        reset();uint64_t id;assert(!tiku_mfs_begin(&fs,"source",TIKU_MFS_STREAM,0,NULL,&id));
+        if(bytes)assert(!tiku_mfs_append(&fs,payload,bytes>65536?65536:bytes));
+        if(bytes>65536)assert(!tiku_mfs_append(&fs,payload+65536,bytes-65536));
+        assert(!tiku_mfs_finalize(&fs));
+        if(scenario==12)file("target");
+        surface_host_t host;surface_config_t cfg=surface_host_config(&host);
+        void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);surface_media_t media;
+        cfg.storage=surface_media_init(&media,bridge);
+        cfg.caller=(tiku_resource_caller_t){.principal="surface-local",.authenticated=1,.scopes=TIKU_RESOURCE_READ|TIKU_RESOURCE_WRITE};
+        surface_t *shell=surface_create(&cfg);assert(shell&&surface_launch(shell,SURFACE_BROWSER));settle(shell,&media);
+        file_tap(shell,&media,70,130);settle(shell,&media);surface_view_t v;surface_view(shell,&v);assert(v.reading&&v.file_actions);
+        size_t before=host.memory.live;
+        file_tap(shell,&media,300,410);surface_view(shell,&v);assert(v.text_entry&&v.file_dialog==3);
+        if(!scenario)file_capture(shell,&host,"copy-file");
+        file_name(shell,"/source");surface_view(shell,&v);assert(v.text_entry&&v.text_error);
+        if(scenario==6)host.memory.fail_at=host.memory.calls+1;
+        file_name(shell,"/target");
+        if(scenario==6){
+            surface_view(shell,&v);assert(v.text_entry&&v.text_error&&v.status==TIKU_RESOURCE_LIMIT);
+            assert(host.memory.live==before);host.memory.fail_at=0;file_name(shell,"/target");
+        }
+        if(scenario==7||scenario==8||scenario==9||scenario==10){
+            unsigned n;
+            for(n=0;n<30000;++n){
+                surface_step(shell);surface_media_poll(&media);
+                if(scenario==7 && media.request && media.request->operation==TIKU_STORAGE_READ && media.request->offset)break;
+                if((scenario==8||scenario==9) && shell->active.state->file_job==7&&!media.request)break;
+                if(scenario==10 && media.request && media.request->operation==TIKU_STORAGE_REPLACE && store.running==4)break;
+            }
+            assert(n<30000);surface_view(shell,&v);assert(v.copy_bytes>0&&v.copy_bytes<=bytes);if(scenario!=7)assert(v.copy_bytes==bytes);
+            if(scenario==8)file_capture(shell,&host,"copy-publish");
+            if(scenario==7||scenario==8)file("changed");
+            if(scenario==9)file("target");
+            if(scenario==10){
+                assert(host.memory.live==before+1);close_refusals=3;
+                assert(surface_close(shell)==SURFACE_CLOSE_ACCEPTED);
+                surface_view(shell,&v);assert(v.retiring&&host.memory.live>=before+1);
+            }
+        }
+        if(scenario==11){
+            assert(shell->active.state->copy_buffer.data);
+            assert(surface_app_back(shell->active.state));
+        }
+        settle(shell,&media);surface_view(shell,&v);
+        tiku_mfs_object_t object;
+        if(scenario==5)assert(v.status==TIKU_RESOURCE_LIMIT&&tiku_mfs_stat(&fs,"target",&object)==TIKU_MFS_NOENT);
+        else if(scenario==7||scenario==8||scenario==9){
+            assert(v.status==TIKU_RESOURCE_STALE_CURSOR);
+            if(scenario==9)assert(!tiku_mfs_stat(&fs,"target",&object)&&object.length==0);
+            else assert(tiku_mfs_stat(&fs,"target",&object)==TIKU_MFS_NOENT);
+        } else if(scenario==12){
+            assert(v.status==TIKU_RESOURCE_BUSY&&!tiku_mfs_stat(&fs,"target",&object)&&!object.length);
+        } else if(scenario>=10){
+            if(fs.failed)assert(!tiku_mfs_mount(&fs,&block,uuid,used,mark,sizeof used));
+            assert(tiku_mfs_stat(&fs,"target",&object)==TIKU_MFS_NOENT);
+        } else {
+            assert(v.status==TIKU_RESOURCE_OK&&!v.reading&&!v.file_job&&v.row_count==2);
+            assert(!tiku_mfs_stat(&fs,"target",&object)&&object.length==bytes&&object.id!=id);
+            uint64_t reader;assert(!tiku_mfs_open_read(&fs,"target",&reader));
+            if(bytes)assert(tiku_mfs_read_at(&fs,reader,0,out,bytes)==(int)bytes&&!memcmp(payload,out,bytes));
+            assert(!tiku_mfs_close_read(&fs,reader));
+        }
+        assert(!tiku_mfs_stat(&fs,"source",&object)&&object.id==id&&object.length==bytes);
+        if(scenario!=10)assert(host.memory.live==before);
+        surface_stop(shell);for(unsigned i=0;i<30000&&!surface_destroy(&shell);++i){surface_step(shell);surface_media_poll(&media);}
+        assert(!shell&&!host.memory.live&&!store.count&&!store.running);free(bridge);
+    }
+}
+
+#endif
+
 int main(void)
 {
     disk = calloc(1,DISK_BYTES); assert(disk);
@@ -429,7 +727,14 @@ int main(void)
     assert(tiku_paged_storage_list(owner,"/",0,0)==TIKU_RESOURCE_DENIED);
     tiku_paged_storage_close(owner); assert(tiku_paged_storage_destroy(&owner));
     assert(!host.memory.live);
-    free(bridge); free(disk);
+    free(bridge); bridge_mutations();
+#if SURFACE_FILE_JOBS
+    sdk_mutations();tracker_actions();
+#endif
+#if SURFACE_CONTENT_JOBS
+    sdk_contents();tracker_create();tracker_copy();
+#endif
+    free(disk);
     printf("media: 4096 descendants, atomic enumeration, sync progress, reads and cancellation pass; max turns=%u, state=%zu\n",maximum_turns,sizeof(read_state_t));
     return 0;
 }

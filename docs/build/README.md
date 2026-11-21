@@ -1,5 +1,8 @@
 # Dependency and SDK checks
 
+[Desktop and Tracker](core-desktop.md) describes the core windowed composition,
+its SDK capabilities, operations and resource limits.
+
 Initialize the pinned foundation and install the checkout's commit hook:
 
 ```sh
@@ -97,3 +100,24 @@ make -f mk/tikuos-test.mk TIKUOS_ROOT=/path/to/tikuOS \
     BUILD=build/tikuos-asan \
     CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-pie -no-pie'
 ```
+
+The [text-input candidate](input-candidate.md) uses an explicit SDK override for
+field events, touch entry, clipboard and Developer Calculator extensions.
+
+The [Editor candidate](editor-candidate.md) adds retained document editing and
+Tracker text opening through the explicit portable SDK.
+
+The [Terminal candidate](terminal-candidate.md) connects a retained console to
+the local TikuOS shell through copied input and output queues.
+
+[Persistent folder candidate](directories-candidate.md) describes typed empty
+folders, explicit provisioning, queued actions and legacy-volume behavior.
+
+The firmware runtime and bindings share fixed media and console bridge capacity
+constants. Each binding statically checks its private state against the runtime
+reservation. Lifecycle fixtures initialize the complete capacities and verify
+refusal above them; a size-only link does not establish successful startup.
+
+Runtime `peak_bytes` includes its own state, alignment and allocation gaps.
+`live_bytes` counts currently allocated payloads. Admission uses the peak extent
+against the complete PSRAM reservation.

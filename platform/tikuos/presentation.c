@@ -89,12 +89,14 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
             const uint32_t *row = (const uint32_t *)((const unsigned char *)p->source.pixels + p->y * p->source.stride);
             unsigned count = right - p->x;
             if (count > remaining) count = remaining;
+            const uint32_t *source = row + p->x;
+            uint16_t *destination = p->buffers[back] + p->y * 800u + p->x;
             for (unsigned i = 0; i < count; ++i) {
-                uint32_t color = row[p->x];
-                p->buffers[back][p->y * 800u + p->x] = (uint16_t)(((color >> 8) & 0xf800u) |
+                uint32_t color = source[i];
+                destination[i] = (uint16_t)(((color >> 8) & 0xf800u) |
                     ((color >> 5) & 0x07e0u) | ((color >> 3) & 0x001fu));
-                ++p->x;
             }
+            p->x += count;
             remaining -= count;
             if (p->x == right) { p->x = (unsigned)p->region.x; ++p->y; }
         }

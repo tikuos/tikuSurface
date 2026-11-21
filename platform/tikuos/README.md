@@ -186,11 +186,16 @@ Seven startup allocations precede display open. Partial allocation failures
 unwind; display open failures enter retirement. Initial display setup clears
 the front surface and uses the existing synchronous initialization/pairing API.
 
-Owner turns paint at most two rows or convert at most 1,024 pixels. Accepted
+Launcher turns paint at most two rows or convert at most 1,024 pixels.
+Core desktop turns paint at most four rows or convert at most 4,096 pixels
+and require the 160 MHz CPU profile. Desktop navigation and queued input are
+processed before starting a new frame. Accepted
 views remain retained through conversion, publication and DMA completion.
 Scanout events are observed on owner turns, including while idle or converting.
 The `/surface/status` frame count measures accepted rendered views;
-`/surface/display` reports completed handoffs. A poll refusal preserves the
+`/surface/display` reports completed handoffs. `/surface/timing` reports
+paint-to-handoff duration, maximum duration since start, completed foreground
+identity and pending frame work. Its counters live in PSRAM and reset on start. A poll refusal preserves the
 source lease and requests stop. A retired transport error completes the source
 with error and requests stop. Close must succeed before scanout allocations
 or a still-retained source can be released. Stop preserves an unclosed display
@@ -198,18 +203,20 @@ for another owner turn. Restart follows completed stop and reopens the display;
 automatic restart is not selected.
 
 Initialization, pairing and close retain the port's synchronous contracts.
-The work limits are not elapsed-time guarantees. A complete frame requires 240 paint, 375 conversion and 188 publication
-steps, plus submission and handoff. LCD mode queues another owner turn while
-work remains, fewer than 32 turns have run in the burst, and less than 2 ms
-has elapsed since its first turn. Touch polling, media progress and rendering use separate owner turns. The
+The work limits are not elapsed-time guarantees. A complete launcher frame requires 240 paint, 375 conversion and 188 publication
+steps, plus submission and handoff. The core requires 120 paint and 94 conversion
+steps with the same publication bound. LCD mode queues another owner turn while
+work remains and fewer than 32 turns have run in the burst (64 for the core desktop). The elapsed-time
+limit is 20 ms for the desktop profile and 2 ms for the launcher profile.
+Touch polling, media progress and rendering use separate owner turns. The
 budget is checked between steps and can be exceeded by the last step. The
 burst state lives in the PSRAM runtime.
 
 Continuations join the process queue behind already queued work. A one-tick
 timer stays armed as fallback if the queue refuses a continuation. Exhausted
 bursts and idle displays return to timer pacing. A delayed DMA completion is
-polled within the same bounded burst policy. The 1,024-pixel and two-row
-work limits remain measurement configurations. Host scheduling checks remove
+polled within the same bounded burst policy. These row and pixel
+work limits are measurement configurations. Host scheduling checks remove
 the mandatory one-tick wait between every phase; they do not establish the
 500 ms complete-frame goal or hardware dispatch bounds.
 
@@ -473,3 +480,16 @@ independent radio/session observations. Sanitizer coverage uses
 also exercise connected runtime polling and frozen-frame repaint behavior.
 The real-driver fixture traps vendor RSSI access while the GUI observes a
 joined radio and checks cached flags and kernel/interrupt-context refusal.
+
+`make test-cpu-clock TIKUOS_ROOT=/path/to/tikuOS` checks the 160 MHz clock
+transition with modeled register completion and ROM delay calibration. It
+rejects unavailable PLL input, update timeout, divider mismatch and invalid
+build selections. Mutation checks exercise the guards. Hardware checks must
+also observe the CPU rate, kernel timers, display, storage and dispatch timing.
+
+The timing node also reports accepted runtime-start/launch request IDs and the
+last request ID that reached a completed frame. `request_us` includes startup construction
+or launch handling, scheduler waits and display handoff; `max_request_us` retains
+the maximum since start. A pending launch replaced before painting has no
+completed sample. A frame already being presented retains its earlier request
+ID. These counters describe programmatic requests, not physical touch input.

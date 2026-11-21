@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "host.h"
+#include "keymap.h"
+#include "tiku_event.h"
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
@@ -16,11 +18,14 @@
 static void advance(surface_host_t *host, surface_t *shell)
 { host->now += 100000; (void)surface_host_poll(host); surface_step(shell); }
 
-/** @brief Capture four deterministic app views without opening a native display. */
+/** @brief Capture enabled deterministic app views without opening a native display. */
 static int capture(surface_host_t *host, surface_t *shell, const char *directory)
 {
     static const char *names[] = {"home", "calculator", "browser", "settings"};
     for (int i = 0; i < 4; ++i) {
+#if SURFACE_DESKTOP
+        if(i==SURFACE_CALCULATOR)continue;
+#endif
         if (!surface_launch(shell, (surface_app_t)i)) return 0;
         surface_step(shell);
         advance(host, shell);
@@ -39,14 +44,21 @@ static int capture(surface_host_t *host, surface_t *shell, const char *directory
     return 1;
 }
 
-/** @brief Translate primary pointer, cancellation and key events to portable input. */
+/** @brief Translate pointer, wheel, cancellation and key events to portable input. */
 static void input(surface_t *shell, XEvent *event)
 {
     tiku_input_event_t portable = {0};
     if (event->type == ButtonPress || event->type == ButtonRelease) {
-        if (event->xbutton.button != Button1) return;
-        portable.type = event->type == ButtonPress ? TIKU_EVENT_POINTER_DOWN : TIKU_EVENT_POINTER_UP;
-        portable.button = 1;
+        if(event->xbutton.button==Button4||event->xbutton.button==Button5){
+            if(event->type!=ButtonPress)return;
+            portable.type=TIKU_EVENT_WHEEL;portable.dy=event->xbutton.button==Button4?-1:1;
+            portable.modifiers=(event->xbutton.state&ShiftMask?TIKU_MOD_SHIFT:0)|
+                (event->xbutton.state&ControlMask?TIKU_MOD_CMD:0);
+        }else{
+            if(event->xbutton.button!=Button1)return;
+            portable.type=event->type==ButtonPress?TIKU_EVENT_POINTER_DOWN:TIKU_EVENT_POINTER_UP;
+            portable.button=1;
+        }
         portable.x = event->xbutton.x;
         portable.y = event->xbutton.y;
     } else if (event->type == MotionNotify) {
@@ -59,7 +71,12 @@ static void input(surface_t *shell, XEvent *event)
         KeySym symbol;
         int n = XLookupString(&event->xkey, text, sizeof text, &symbol, NULL);
         portable.type = TIKU_EVENT_KEY_DOWN;
-        portable.key = symbol == XK_Escape ? 27 : symbol == XK_BackSpace ? 8 : n == 1 ? (unsigned char)text[0] : 0;
+        portable.modifiers = (event->xkey.state & ShiftMask ? TIKU_MOD_SHIFT : 0) |
+            (event->xkey.state & ControlMask ? TIKU_MOD_CMD : 0) |
+            (event->xkey.state & Mod1Mask ? TIKU_MOD_OPTION : 0);
+        portable.key=surface_host_key(symbol,portable.modifiers);
+        if (n > 0 && n < (int)sizeof portable.text && !(portable.modifiers & TIKU_MOD_CMD))
+            memcpy(portable.text, text, (size_t)n);
     } else return;
     (void)surface_post(shell, &portable);
 }

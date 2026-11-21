@@ -17,6 +17,20 @@ typedef struct {
     unsigned (*read)(void *, surface_touch_map_t *);
     int (*save)(void *, const surface_touch_map_t *);
 } surface_settings_provider_t;
+/** @brief Desktop palette and compatible handler choices, independent of calibration. */
+typedef struct {uint8_t background,text,html,markdown;} surface_preferences_t;
+/** @brief Serialized preference callbacks; save retains a copy through completion. */
+typedef struct {
+    void *context;
+    unsigned (*read)(void *,surface_preferences_t *);
+    int (*save)(void *,const surface_preferences_t *);
+} surface_preferences_provider_t;
+/** @brief Validate palette and installed-handler choice indexes. */
+int surface_preferences_valid(const surface_preferences_t *);
+/** @brief Encode a checked version-1 desktop record with CRC and reserved bytes. */
+int surface_preferences_encode(const surface_preferences_t *,unsigned char out[SURFACE_SETTINGS_BYTES]);
+/** @brief Decode an independent desktop record; errors preserve the destination. */
+unsigned surface_preferences_decode(const unsigned char *,unsigned,surface_preferences_t *);
 /** @brief Encode a validated mapping in a fixed little-endian version-1 record. */
 int surface_settings_encode(const surface_touch_map_t *, unsigned char out[SURFACE_SETTINGS_BYTES]);
 /** @brief Decode a checksummed record; errors leave the destination unchanged. */

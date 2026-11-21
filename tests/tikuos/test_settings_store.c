@@ -188,6 +188,45 @@ static void unavailable_space(void)
     remount(); check_neighbour();
     assert(surface_runtime_start()); expect(SURFACE_SETTINGS_SAVED,&first); stop();
 }
+#if SURFACE_PREFERENCES
+/** @brief Complete an independent desktop save while calibration requests are excluded. */
+static unsigned save_preferences(const surface_preferences_t *p)
+{
+    assert(surface_runtime_set_preferences(p));assert(!surface_runtime_calibrate(&second));
+    unsigned status=SURFACE_SETTINGS_PENDING;surface_preferences_t got;
+    for(unsigned i=0;i<20000&&status==SURFACE_SETTINGS_PENDING;++i){assert(surface_runtime_poll());assert(surface_runtime_preferences(&got,&status));}
+    assert(status!=SURFACE_SETTINGS_PENDING);return status;
+}
+/** @brief Tear each preference record write and preserve calibration plus unrelated files. */
+static unsigned preferences_interruptions(int prior)
+{
+    const surface_preferences_t old={1,0,1,2},newer={4,1,2,0},empty={0};
+    prepare(1);
+    if(prior){assert(surface_runtime_start());assert(save_preferences(&old)==SURFACE_SETTINGS_SAVED);stop();remount();}
+    memcpy(snapshot,disk,sizeof disk);assert(surface_runtime_start());power_on();assert(save_preferences(&newer)==SURFACE_SETTINGS_SAVED);
+    unsigned count=calls,sizes[32],cases=0;assert(count&&count<=32);memcpy(sizes,lengths,sizeof sizes);stop();
+    for(unsigned call=0;call<count;++call)for(unsigned prefix=0;prefix<=sizes[call];++prefix){
+        if(sizes[call]==4&&prefix!=0&&prefix!=4)continue;
+        memcpy(disk,snapshot,sizeof disk);remount();assert(surface_runtime_start());expect(SURFACE_SETTINGS_SAVED,&first);
+        power_on();cut_call=call;cut_bytes=prefix;assert(save_preferences(&newer)==SURFACE_SETTINGS_FAILED&&failed);
+        surface_preferences_t got;unsigned status;assert(surface_runtime_preferences(&got,&status)&&status==SURFACE_SETTINGS_FAILED&&!memcmp(&got,prior?&old:&empty,sizeof got));
+        stop();remount();check_neighbour();assert(surface_runtime_start());expect(SURFACE_SETTINGS_SAVED,&first);
+        assert(surface_runtime_preferences(&got,&status));assert((status==SURFACE_SETTINGS_SAVED&&!memcmp(&got,&newer,sizeof got))||(status==(prior?SURFACE_SETTINGS_SAVED:SURFACE_SETTINGS_DEFAULT)&&!memcmp(&got,prior?&old:&empty,sizeof got)));
+        stop();++cases;
+    }
+    return cases;
+}
+/** @brief Refuse unknown desktop schemas without overwriting either product record. */
+static void preferences_schema(void)
+{
+    unsigned char bytes[32];surface_preferences_t p={2,1,2,1},got;unsigned status;
+    prepare(1);assert(surface_preferences_encode(&p,bytes));bytes[4]=2;reseal(bytes);
+    assert(tiku_tfs_write(&fs,"tikusurface-desk-v1",bytes,32)==TFS_OK);remount();memcpy(snapshot,disk,sizeof disk);
+    assert(surface_runtime_start());assert(surface_runtime_preferences(&got,&status)&&status==SURFACE_SETTINGS_INCOMPATIBLE&&!got.background);
+    assert(!surface_runtime_set_preferences(&p));expect(SURFACE_SETTINGS_SAVED,&first);stop();assert(!memcmp(snapshot,disk,sizeof disk));
+}
+#endif
+
 /** @brief Exercise the real runtime, settings adapter and TFS across restart and write loss. */
 void surface_test_settings_persistence(void)
 {
@@ -202,6 +241,11 @@ void surface_test_settings_persistence(void)
     assert(surface_os_settings_write(bytes,sizeof bytes)==-1 && !calls); owner=1;
     assert(surface_os_settings_write(bytes,31)==-1 && !calls);
     unsigned cases=interruptions(0)+interruptions(1);
-    refused_records(); unavailable_space(); available=0;
+    refused_records(); unavailable_space();
+#if SURFACE_PREFERENCES
+    unsigned pref_cases=preferences_interruptions(0)+preferences_interruptions(1);preferences_schema();
+    printf("Desktop preferences/TFS: %u interrupted saves preserve calibration, neighbours and applied state\n",pref_cases);
+#endif
+    available=0;
     printf("Settings/TFS: restart, %u interrupted saves, malformed/future records and neighbour preservation pass\n",cases);
 }

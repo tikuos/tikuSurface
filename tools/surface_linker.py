@@ -7,21 +7,29 @@ from pathlib import Path
 from check_placement import TIER_FLASH_SECTIONS, I2C_FLASH_SECTIONS, STORAGE_FLASH_SECTIONS, MEDIA_FLASH_SECTIONS, NVM_FLASH_SECTIONS
 
 
-def generate(base):
+def generate(base, transfer=False):
     """Select the native UI unit and owner-context bindings before broad wildcards."""
     exclusion = 'EXCLUDE_FILE (*tiku_bt.o *tiku_shell_cmd_bt.o)'
     marker = '        *(.flash.text)'
     if base.count(exclusion) != 1 or base.count(marker) != 1:
         raise ValueError('Firmware linker anchors changed; review product placement')
-    units = ('*surface-ui.o', '*tikuSurface/platform/tikuos/bindings.o',
+    units = ('*surface-ui.o', '*tikuSurface/platform/tikuos/console_io.o', '*tikuSurface/platform/tikuos/device_io.o', '*tikuSurface/platform/tikuos/process_io.o', '*tikuSurface/platform/tikuos/vfs_io.o', '*tikuSurface/platform/tikuos/bindings.o',
              '*tikuSurface/platform/tikuos/diagnostics.o', '*tikuSurface/platform/tikuos/display.o',
              '*tikuSurface/platform/tikuos/services.o', '*tikuSurface/platform/tikuos/settings_io.o', '*tikuSurface/platform/tikuos/media_io.o',
-             '*services/storage/tiku_media_async.o', '*interfaces/bus/tiku_i2c_bus.o', '*arch/esp32s31/tiku_spi_arch.o',
+             '*services/storage/tiku_media_async.o', '*services/storage/tiku_media_mutation.o', '*services/storage/tiku_media_checkpoint.o', '*interfaces/bus/tiku_i2c_bus.o', '*arch/esp32s31/tiku_spi_arch.o',
              '*arch/esp32s31/tiku_sdcard_arch.o', '*arch/esp32s31/tiku_storage_async_io.o', '*arch/esp32s31/tiku_mfs_block_arch.o',
              '*tikuSurface/platform/tikuos/input.o', '*interfaces/input/tiku_touch_gt1151.o',
              '*drivers/input/gt1151/tiku_drv_input_gt1151.o',
              '*interfaces/display/tiku_display.o', '*interfaces/display/tiku_display_async.o',
              '*arch/esp32s31/tiku_display_arch.o', '*arch/esp32s31/tiku_dma_arch.o')
+    if transfer:
+        units += ('*services/storage/tiku_media_transfer_control.o',
+                  '*services/storage/tiku_media_transfer_async.o',
+                  '*services/storage/tiku_media_transfer_listener.o',
+                  '*services/storage/tiku_media_transfer_tcp.o',
+                  '*services/storage/tiku_media_transfer_service.o',
+                  '*services/storage/tiku_media_transfer_server.o',
+                  '*tikukits/net/ipv4/tiku_kits_net_tcp.o')
     nvm = ('*arch/esp32s31/tiku_storage_arch.o', '*arch/esp32s31/tiku_libc_heap.o')
     media = ('*kernel/fs/tiku_mfs.o', '*services/storage/tiku_media_card.o')
     expanded = 'EXCLUDE_FILE (*tiku_bt.o *tiku_shell_cmd_bt.o ' + ' '.join(units + media + nvm) + ')'
@@ -36,9 +44,15 @@ def generate(base):
     for unit in nvm:
         selection += '        ' + unit + '(' + ' '.join(NVM_FLASH_SECTIONS[unit.rsplit('/', 1)[-1]]) + ' .rodata* .srodata* .data.rel.ro*)\n'
     selection += '        *arch/esp32s31/tiku_i2c_arch.o(' + ' '.join(I2C_FLASH_SECTIONS) + ')\n'
+    selection += '        *services/console/tiku_console.o(.text.tiku_console_inject .text.tiku_console_inject_clear)\n'
     selection += '        *libc.a:libc_a-strrchr.o(.text .text.*)\n'
+    selection += '        *libgcc.a:_floatdisf.o(.text .text.*)\n'
+    selection += '        *kernel/vfs/tiku_vfs.o(.text.tiku_vfs_read_passive .text.tiku_vfs_child_at)\n'
+    selection += '        *libc.a:libc_a-strcspn.o(.text .text.*)\n'
     selection += '        *kernel/memory/tiku_tier.o(' + ' '.join(TIER_FLASH_SECTIONS) + ')\n'
     selection += '        *services/storage/tiku_media_transfer_server.o(.text.tiku_media_transfer_server_status)\n'
+    if transfer:
+        selection += '        *boot/tiku_s31_ram.o(.text.tiku_process_thread_s31_wifi_start)\n'
     selection += '        KEEP(*surface-ui.o(.tiku.identity))\n        __surface_irom_end = .;\n'
     bss = '        *(.bss .bss.* .sbss .sbss.* COMMON)'
     if base.count(bss) != 1:
@@ -54,8 +68,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--transfer', action='store_true')
     args = parser.parse_args()
-    output = generate(args.base.read_text())
+    output = generate(args.base.read_text(), args.transfer)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(output)
 

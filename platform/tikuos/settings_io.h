@@ -18,4 +18,8 @@ int surface_os_settings_begin(void *bridge, const unsigned char *, size_t length
 int surface_os_settings_poll(void *bridge);
 /** @brief Request cancellation; the caller must poll to retirement before releasing the bridge. */
 void surface_os_settings_cancel(void *bridge);
+/** @brief Read the independent desktop preference record with the calibration status convention. */
+int surface_os_preferences_read(unsigned char *,size_t,size_t *);
+/** @brief Queue a copied desktop record through the same serialized transaction bridge. */
+int surface_os_preferences_begin(void *,const unsigned char *,size_t);
 #endif

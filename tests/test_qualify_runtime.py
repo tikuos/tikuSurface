@@ -87,6 +87,39 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(device.fail, 0)
         return passed, result
 
+    def test_core_inventory_and_allocation_refusals(self):
+        device, result = LCDDevice(), {}
+        def command(text):
+            if text == 'write /surface/control launch=1':
+                raise AssertionError('Calculator is absent from the core inventory')
+            return device.command(text)
+        self.assertTrue(runner.qualify(command, result, 100, device.pause,
+                                      lambda: device.now, lcd=True, desktop=True))
+        self.assertTrue(result['qualification_complete'])
+        self.assertEqual(result['scope'], 'core-desktop-lifecycle')
+        commands = [row['command'] for row in result['transcript']]
+        self.assertIn('write /surface/control fail=10', commands)
+        self.assertTrue(result['boot_reactivation_passed'])
+        self.assertEqual(sum('launch=' in c for c in commands), 603)
+        self.assertEqual([c for c in commands if 'launch=' in c][:9],
+                         ['write /surface/control launch=2',
+                          'write /surface/control launch=3',
+                          'write /surface/control launch=2'] +
+                         ['write /surface/control launch=2',
+                          'write /surface/control launch=3',
+                          'write /surface/control launch=0',
+                          'write /surface/control launch=2',
+                          'write /surface/control launch=3',
+                          'write /surface/control launch=2'])
+        self.assertFalse(result['touch_qualified'] or result['physical_latency_qualified'])
+        with self.assertRaises(ValueError):
+            runner.qualify(device.command, {}, desktop=True)
+        device = LCDDevice('slow')
+        with self.assertRaisesRegex(ValueError, 'dispatch limit'):
+            runner.qualify(device.command, {}, 100, device.pause,
+                           lambda: device.now, lcd=True, desktop=True)
+        self.assertFalse(device.running)
+
     def test_lcd_lifecycle_scope_and_refusals(self):
         device, result = LCDDevice('media'), {}
         self.assertTrue(runner.qualify(device.command, result, 100, device.pause, lambda: device.now, lcd=True))

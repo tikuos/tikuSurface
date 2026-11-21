@@ -20,12 +20,118 @@ class PlacementTests(unittest.TestCase):
         inputs = {name: {'address': 0, 'size': 4, 'kind': 'T'} for name in names}
         final = {name: dict(value, address=placement.IROM[0] + i * 8) for i, (name, value) in enumerate(inputs.items())}
         final.update({name: {'address': placement.SRAM[0], 'size': 4, 'kind': 'T'} for name in placement.RESIDENT})
-        for name, address in (('__surface_irom_start', placement.IROM[0]),
+        for name, address in (('__tiku_s31_irom_end', placement.IROM[0] + 800000),
+                              ('__surface_irom_start', placement.IROM[0]),
                               ('__surface_irom_end', placement.IROM[0] + 1000),
                               ('__tier_sram_start', placement.SRAM[0]),
                               ('__tier_sram_end', placement.SRAM[0] + 102720)):
             final[name] = {'address': address, 'size': 0, 'kind': 'A'}
         return final, inputs
+
+    def test_workspace_arithmetic_placement(self):
+        """Keep the workspace clock conversion out of resident SRAM."""
+        final, inputs = self.baseline()
+        final['__floatdisf'] = {'address': placement.SRAM[0] + 100, 'size': 136, 'kind': 'T'}
+        with self.assertRaisesRegex(ValueError, 'Workspace arithmetic'):
+            placement.validate(final, inputs)
+        final['__floatdisf']['address'] = placement.IROM[0] + 100
+        placement.validate(final, inputs)
+
+    def test_core_desktop_budget(self):
+        """Bound native workspace and Tracker code independently of application additions."""
+        final, inputs = self.baseline()
+        final['surface_desktop_create'] = {'address': placement.IROM[0] + 100, 'size': 8, 'kind': 'T'}
+        final['__surface_irom_end']['address'] = placement.IROM[0] + 229376
+        self.assertEqual(placement.validate(final, inputs)['ui_irom_budget_bytes'], 229376)
+        final['__surface_irom_end']['address'] += 1
+        with self.assertRaises(ValueError):
+            placement.validate(final, inputs)
+        final['__surface_irom_end']['address'] -= 1
+        final['__tiku_s31_irom_end']['address'] = placement.IROM[1] - 65535
+        with self.assertRaisesRegex(ValueError, 'image IROM reserve'):
+            placement.validate(final, inputs)
+
+    def test_editor_composition_budget(self):
+        final, inputs = self.baseline()
+        final['surface_editor_start'] = {'address': placement.IROM[0] + 100, 'size': 8, 'kind': 'T'}
+        final['__surface_irom_end']['address'] = placement.IROM[0] + 262144
+        self.assertEqual(placement.validate(final, inputs)['ui_irom_budget_bytes'], 262144)
+        final['__surface_irom_end']['address'] += 1
+        with self.assertRaises(ValueError):
+            placement.validate(final, inputs)
+
+    def test_reader_composition_budget(self):
+        final, inputs = self.baseline()
+        final['surface_reader_start'] = {'address': placement.IROM[0] + 100, 'size': 8, 'kind': 'T'}
+        final['__surface_irom_end']['address'] = placement.IROM[0] + 327680
+        self.assertEqual(placement.validate(final, inputs)['ui_irom_budget_bytes'], 327680)
+        final['__surface_irom_end']['address'] += 1
+        with self.assertRaises(ValueError):
+            placement.validate(final, inputs)
+
+    def test_diff_composition_budget(self):
+        final, inputs = self.baseline()
+        final['surface_diff_start'] = {'address': placement.IROM[0] + 100, 'size': 8, 'kind': 'T'}
+        final['__surface_irom_end']['address'] = placement.IROM[0] + 393216
+        self.assertEqual(placement.validate(final, inputs)['ui_irom_budget_bytes'], 393216)
+        final['__surface_irom_end']['address'] += 1
+        with self.assertRaises(ValueError):
+            placement.validate(final, inputs)
+
+    def test_editor_lines_composition_budget(self):
+        final, inputs = self.baseline()
+        final['tiku_edit_lines'] = {'address': placement.IROM[0] + 100, 'size': 8, 'kind': 'T'}
+        final['__surface_irom_end']['address'] = placement.IROM[0] + 458752
+        self.assertEqual(placement.validate(final, inputs)['ui_irom_budget_bytes'], 458752)
+        final['__surface_irom_end']['address'] += 1
+        with self.assertRaises(ValueError):
+            placement.validate(final, inputs)
+        final['__surface_irom_end']['address'] -= 1
+        final['__tiku_s31_irom_end']['address'] = placement.IROM[1] - 65535
+        with self.assertRaisesRegex(ValueError, 'image IROM reserve'):
+            placement.validate(final, inputs)
+
+    def test_image_headroom(self):
+        final, inputs = self.baseline()
+        final['__tiku_s31_irom_end']['address'] = placement.IROM[1] - 65535
+        with self.assertRaisesRegex(ValueError, 'image IROM reserve'):
+            placement.validate(final, inputs)
+
+    def test_console_foreground_placement(self):
+        final, inputs = self.baseline()
+        for name in ('surface_os_console_open', 'tiku_console_inject', 'tiku_console_inject_clear'):
+            final[name] = {'address': placement.IROM[0], 'size': 4, 'kind': 'T'}
+        placement.validate(final, inputs)
+        final['tiku_console_inject']['address'] = placement.SRAM[0]
+        with self.assertRaisesRegex(ValueError, 'Console foreground helper outside IROM'):
+            placement.validate(final, inputs)
+
+    def test_basic_foreground_placement(self):
+        final, inputs = self.baseline()
+        for name in ('surface_os_program_start', 'tiku_basic_job_start_owned', 'tiku_basic_job_stop_owned', 'strcspn'):
+            final[name] = {'address': placement.IROM[0], 'size': 4, 'kind': 'T'}
+        placement.validate(final, inputs)
+        final['strcspn']['address'] = placement.SRAM[0]
+        with self.assertRaisesRegex(ValueError, 'BASIC foreground helper outside IROM'):
+            placement.validate(final, inputs)
+
+    def test_device_foreground_placement(self):
+        final, inputs = self.baseline()
+        for name in ('surface_os_device_read', 'tiku_vfs_read_passive'):
+            final[name] = {'address': placement.IROM[0], 'size': 4, 'kind': 'T'}
+        placement.validate(final, inputs)
+        final['tiku_vfs_read_passive']['address'] = placement.SRAM[0]
+        with self.assertRaisesRegex(ValueError, 'Device foreground helper outside IROM'):
+            placement.validate(final, inputs)
+
+    def test_vfs_foreground_placement(self):
+        final, inputs = self.baseline()
+        for name in ('surface_os_vfs_list', 'tiku_vfs_child_at'):
+            final[name] = {'address': placement.IROM[0], 'size': 4, 'kind': 'T'}
+        placement.validate(final, inputs)
+        final['tiku_vfs_child_at']['address'] = placement.SRAM[0]
+        with self.assertRaisesRegex(ValueError, 'VFS foreground helper outside IROM'):
+            placement.validate(final, inputs)
 
     def test_symbol_placement(self):
         final, inputs = self.baseline()

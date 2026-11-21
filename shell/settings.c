@@ -50,3 +50,23 @@ unsigned surface_settings_decode(const unsigned char *data, unsigned n, surface_
     *out = m;
     return SURFACE_SETTINGS_SAVED;
 }
+
+int surface_preferences_valid(const surface_preferences_t *p)
+{return p&&p->background<6&&p->text<2&&p->html<3&&p->markdown<3;}
+int surface_preferences_encode(const surface_preferences_t *p,unsigned char out[SURFACE_SETTINGS_BYTES])
+{
+    if(!out||!surface_preferences_valid(p))return 0;
+    memset(out,0,SURFACE_SETTINGS_BYTES);memcpy(out,"TSDP",4);out[4]=1;out[5]=SURFACE_SETTINGS_BYTES;
+    out[6]=p->background;out[7]=p->text;out[8]=p->html;out[9]=p->markdown;
+    uint32_t crc=checksum(out,28);for(unsigned i=0;i<4;++i)out[28+i]=(unsigned char)(crc>>(8*i));return 1;
+}
+unsigned surface_preferences_decode(const unsigned char *data,unsigned n,surface_preferences_t *out)
+{
+    if(!data||!out||n!=SURFACE_SETTINGS_BYTES||memcmp(data,"TSDP",4))return SURFACE_SETTINGS_CORRUPT;
+    uint32_t crc=0;for(unsigned i=0;i<4;++i)crc|=(uint32_t)data[28+i]<<(8*i);
+    if(checksum(data,28)!=crc)return SURFACE_SETTINGS_CORRUPT;
+    if(data[4]!=1||data[5]!=SURFACE_SETTINGS_BYTES)return SURFACE_SETTINGS_INCOMPATIBLE;
+    for(unsigned i=10;i<28;++i)if(data[i])return SURFACE_SETTINGS_INCOMPATIBLE;
+    surface_preferences_t p={data[6],data[7],data[8],data[9]};if(!surface_preferences_valid(&p))return SURFACE_SETTINGS_CORRUPT;
+    *out=p;return SURFACE_SETTINGS_SAVED;
+}

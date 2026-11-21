@@ -6,18 +6,28 @@ The image identities are `tikusurface_s31_lcd` and `tikusurface_s31_diag`;
 qualification providers check the selected identity before sending commands.
 See the [build instructions](../build/README.md) for the SDK and target flags.
 
+The [first-use and recovery workflow](first-use.md) covers boot checks, card
+preparation, external network provisioning and touch recovery through UART.
+
 ## Navigation and applications
 
 The launcher opens Word calculator, Media browser or Device information.
-Home returns to the launcher and releases an application's pending work after
-its providers retire. Back returns from a file preview to its folder, from a
+Home returns to the launcher and retains open applications and their work.
+Applications lists the available apps and marks open instances; selecting one
+restores its state. Close ends the foreground application after its providers
+retire. Unsaved settings require Keep editing or Discard; a pending save must
+finish before Close is available. Back returns from a file preview to its folder, from a
 folder to its parent, or from an application root to the launcher. Controls
 activate when the primary contact is released inside the pressed control.
 Dragging outside cancels the action. Additional contacts do not activate it.
 
-The calculator accepts a hexadecimal word of up to 16 digits and displays
-hexadecimal, decimal, octal and binary forms. Invalid digits and overflow have
-visible error states. Backspace removes a digit and Clear resets the word.
+The word calculator supports 8-, 16-, 32- and 64-bit unsigned words. Tap the
+width button to cycle widths; a narrower width that cannot hold the word is
+refused. Tap the input-base button to cycle hexadecimal, decimal, octal and
+binary while preserving the value. Swap bytes reverses byte order at the
+selected width. Four result fields show the value in each base. Invalid digits
+and overflow leave the word unchanged and display an error. Backspace removes
+a digit and Clear resets the word. Width, base and input survive app switching.
 
 The browser reads an already mounted native-media volume. It does not format
 or write a card. Refresh restarts a listing after media changes or a stale
@@ -37,9 +47,17 @@ bytes. An unavailable radio or transfer service leaves the local applications
 available. This view observes services; it does not start a listener or change
 network settings.
 
+Device information displays the selected product and TikuOS revisions. A
+`-modified` suffix identifies a build from a modified working tree. Host previews
+display the product revision and the host designation.
+
 ## Calibration
 
-Device information offers axis/orientation controls and an explicit Save.
+Device information offers axis/orientation controls, Defaults and an explicit Save.
+Defaults resets the editable bounds to 0..799 and 0..479 and clears axis swaps
+and reversals. It requires Save to persist or apply the change. Home and switching
+retain an unsaved draft; Close asks before discarding it. Pending saves and unavailable or incompatible settings
+disable these controls. Defaults requires a usable input mapping to reach it.
 Initial raw bounds are 0..799 horizontally and 0..479 vertically. The panel's
 measured bounds can be supplied through `/surface/calibration`; the runtime
 binding documents the seven-field command format. A valid save is queued and

@@ -10,6 +10,7 @@
 #define TIKU_S31_SD_ASYNC_ENABLE 1
 #include <arch/esp32s31/tiku_mfs_block_arch.c>
 static unsigned opened,closed,begins,reads,refuse,fail_io,wrong_card;
+static unsigned writes,syncs,authorized,cancel_busy;
 static uint32_t physical;
 static void *destination;
 int tiku_s31_sd_open_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card)
@@ -21,6 +22,12 @@ int tiku_s31_sd_clock_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card,uint
 { assert(opened && card==op->card && hz==4000000);op->state=2;return 1; }
 int tiku_s31_sd_read_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card,uint32_t lba,void *out)
 { assert(opened && card==op->card);op->state=3;physical=lba;destination=out;++reads;return 1; }
+int tiku_s31_sdcard_write_enable(tiku_s31_sdcard_t *card,uint64_t first,uint64_t count)
+{ assert(opened && card && first==100 && count==1000);authorized=1;return 0; }
+int tiku_s31_sd_write_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card,uint32_t lba,const void *in)
+{ assert(opened && authorized && card==op->card);op->state=4;physical=lba;destination=(void *)in;++writes;return 1; }
+int tiku_s31_sd_sync_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card)
+{ assert(opened && authorized && card==op->card);op->state=5;++syncs;return 1; }
 int tiku_s31_sd_poll(tiku_s31_sd_async_t *op)
 {
     assert(opened && op->state);
@@ -32,7 +39,7 @@ int tiku_s31_sd_poll(tiku_s31_sd_async_t *op)
 int tiku_s31_sdcard_close(tiku_s31_sdcard_t *card)
 { (void)card;assert(opened);opened=0;++closed;return 0; }
 int tiku_s31_sd_cancel(tiku_s31_sd_async_t *op)
-{ assert(opened && op->state);opened=op->state=0;++closed;return 0; }
+{ assert(opened && op->state);if(cancel_busy){--cancel_busy;return TIKU_S31_SD_BUSY;}opened=op->state=0;++closed;return 0; }
 int tiku_s31_sdcard_read(uint32_t lba,void *out,void *card)
 { (void)lba;(void)out;(void)card;assert(0);return -1; }
 int tiku_s31_sdcard_write(uint32_t lba,const void *in,tiku_s31_sdcard_t *card)
@@ -69,6 +76,21 @@ int main(void)
     assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
     assert(tiku_s31_mfs_async_read(&op,1,1,output)==1 && !tiku_s31_mfs_async_close(&op));
     assert(!backend.active && !opened);
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(tiku_s31_mfs_async_write(&op,7,1,output)==TIKU_MFS_ARG);
+    assert(tiku_s31_mfs_async_sync(&op)==TIKU_MFS_ARG && !authorized);
+    assert(!tiku_s31_mfs_async_write_enable(&op) && backend.active==3 && authorized);
+    assert(tiku_s31_mfs_async_write(&op,999,2,output)==TIKU_MFS_ARG);
+    assert(tiku_s31_mfs_async_write(&op,0,9,output)==TIKU_MFS_ARG);
+    assert(tiku_s31_mfs_async_write(&op,7,8,output)==1 && physical==107);
+    for(unsigned i=0;i<8;i++)assert(tiku_s31_mfs_async_poll(&op)==(i==7?0:1));
+    assert(writes==8 && physical==114);
+    assert(tiku_s31_mfs_async_sync(&op)==1 && !tiku_s31_mfs_async_poll(&op) && syncs==1);
+    assert(tiku_s31_mfs_async_write(&op,0,1,output)==1);cancel_busy=2;
+    assert(tiku_s31_mfs_async_close(&op)==TIKU_MFS_BUSY && opened && backend.active==3);
+    assert(tiku_s31_mfs_async_close(&op)==TIKU_MFS_BUSY && opened && backend.active==3);
+    assert(!tiku_s31_mfs_async_close(&op) && !backend.active && !opened);
     backend.first=32767;
     assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
     assert(tiku_s31_mfs_async_poll(&op)==TIKU_MFS_STALE && !backend.active && !opened);
