@@ -121,7 +121,7 @@ static int control_write(const char *text, size_t length)
 {
     unsigned value;
     if (!surface_os_in_owner()) return TIKU_VFS_EACCES;
-    if (!text || !length || length > 16) return TIKU_VFS_EINVAL;
+    if (!text || !length || length > 64) return TIKU_VFS_EINVAL;
     if (length == 5 && !memcmp(text, "start", 5))
         return tiku_application_start() ? TIKU_VFS_OK : TIKU_VFS_EIO;
     if (length == 4 && !memcmp(text, "stop", 4)) {
@@ -131,6 +131,52 @@ static int control_write(const char *text, size_t length)
     if (length > 7 && !memcmp(text, "launch=", 7) &&
         number(text + 7, length - 7, 3, &value))
         return surface_runtime_launch(value) ? TIKU_VFS_OK : TIKU_VFS_EIO;
+#if SURFACE_NATIVE_DESKTOP
+    if (length == 7 && !memcmp(text, "capture", 7))
+        return surface_runtime_capture() ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length > 5 && !memcmp(text, "hash=", 5))
+        return surface_runtime_hash(text + 5, length - 5) ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 6 && !memcmp(text, "report", 6))
+        return surface_runtime_report() ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 6 && !memcmp(text, "stacks", 6))
+        return surface_runtime_stacks() ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 7 && !memcmp(text, "samples", 7))
+        return surface_runtime_samples() ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 4 && !memcmp(text, "heap", 4))
+        return surface_runtime_heap_report() ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    /* down=X,Y move=X,Y up=X,Y tap=X,Y dtap=X,Y: pointer events as touch
+     * posts them; dtap is two taps at once. */
+    {
+        const char *eq = memchr(text, '=', length), *comma;
+        unsigned x, y;
+
+        if (eq != NULL && (comma = memchr(eq, ',', length - (size_t)(eq - text))) != NULL &&
+            number(eq + 1, (size_t)(comma - eq - 1), 65535u, &x) &&
+            number(comma + 1, length - (size_t)(comma + 1 - text), 65535u, &y)) {
+            size_t key = (size_t)(eq - text);
+
+            if ((key == 4 && !memcmp(text, "down", 4)) || (key == 4 && !memcmp(text, "move", 4)) ||
+                (key == 2 && !memcmp(text, "up", 2)) || (key == 3 && !memcmp(text, "tap", 3)))
+                return surface_runtime_inject(text[0], x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
+            if (key == 4 && !memcmp(text, "dtap", 4))
+                return surface_runtime_inject('D', x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
+        }
+    }
+    /* drag=X0,Y0,X1,Y1: down, eight moves along the line, up. */
+    if (length > 5 && !memcmp(text, "drag=", 5)) {
+        unsigned v[4];
+        size_t at = 5;
+
+        for (unsigned k = 0; k < 4; k++) {
+            size_t end = at;
+
+            while (end < length && text[end] != ',') end++;
+            if (!number(text + at, end - at, 65535u, &v[k])) return TIKU_VFS_EINVAL;
+            at = end + 1;
+        }
+        return surface_runtime_drag(v[0], v[1], v[2], v[3]) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
+    }
+#endif
     if (length > 5 && !memcmp(text, "fail=", 5) &&
         number(text + 5, length - 5, 32, &value)) {
         surface_runtime_fail_at(value);

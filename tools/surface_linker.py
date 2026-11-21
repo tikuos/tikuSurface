@@ -64,13 +64,46 @@ def generate(base, transfer=False):
     return base.replace(marker, selection + marker).replace(bss, tail.rstrip())
 
 
+def native_desktop(script):
+    """Give the native desktop a 2 MB code window and its statics in PSRAM.
+
+    The shell's zero-initialized data in surface-ui.o moves to a section at the
+    top of PSRAM; the firmware attaches its PSRAM tier below that section.
+    Small data stays in SRAM, where the global pointer reaches it.
+    """
+    window = 'IROM (rx) : ORIGIN = 0x40020020, LENGTH = DEFINED(S31_FIRMWARE) ? 1024K - 32 : 512K - 32'
+    if script.count(window) != 1:
+        raise ValueError('Firmware code window anchor changed; review the desktop window')
+    script = script.replace(window, 'IROM (rx) : ORIGIN = 0x40020020, LENGTH = 2048K - 32')
+    memory_end = script.index('}', script.index('MEMORY {'))
+    script = (script[:memory_end] + '    PSRAMSTATIC (rw) : ORIGIN = 0x50F60000, LENGTH = 640K\n' +
+              script[memory_end:])
+    unit_bss = '        *surface-ui.o(.bss .bss.* .sbss .sbss.* COMMON)\n'
+    if script.count(unit_bss) != 1:
+        raise ValueError('Desktop BSS selection changed; review the desktop statics')
+    script = script.replace(unit_bss, '        *surface-ui.o(.sbss .sbss.*)\n')
+    anchor = '    .uninit (NOLOAD) : ALIGN(4096) {'
+    if script.count(anchor) != 1:
+        raise ValueError('Firmware uninit anchor changed; review the desktop statics')
+    section = ('    .surface_psram (NOLOAD) : ALIGN(64) {\n'
+               '        __surface_psram_bss_start = .;\n'
+               '        *surface-ui.o(.bss .bss.* COMMON)\n'
+               '        . = ALIGN(64);\n'
+               '        __surface_psram_bss_end = .;\n'
+               '    } > PSRAMSTATIC\n')
+    return script.replace(anchor, section + anchor)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--transfer', action='store_true')
+    parser.add_argument('--native-desktop', action='store_true')
     args = parser.parse_args()
     output = generate(args.base.read_text(), args.transfer)
+    if args.native_desktop:
+        output = native_desktop(output)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(output)
 

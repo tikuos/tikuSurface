@@ -2,6 +2,8 @@
 
 [Desktop and Tracker](core-desktop.md) describes the core windowed composition,
 its SDK capabilities, operations and resource limits.
+[Native desktop](native-desktop.md) describes TikuDesktop's desktop, Deskbar
+and Tracker built for the S31 panel.
 
 Initialize the pinned foundation and install the checkout's commit hook:
 

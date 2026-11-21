@@ -38,7 +38,18 @@ int surface_runtime_input_stats(surface_input_stats_t *);
 #ifndef SURFACE_DIFF
 #define SURFACE_DIFF 0
 #endif
+#ifndef SURFACE_NATIVE_DESKTOP
+#define SURFACE_NATIVE_DESKTOP 0
+#endif
+/* The native desktop: two RGB565 scanout buffers, the desktop thread's
+ * 3 MiB stack and the C-library heap the shell allocates from.  With
+ * the display's 768,000-byte scanout this leaves 182,272 bytes of the
+ * PSRAM tier free. */
+#if SURFACE_NATIVE_DESKTOP
+#define SURFACE_RUNTIME_BYTES (13056u * 1024u)
+#else
 #define SURFACE_RUNTIME_BYTES (1536000u + (SURFACE_IMAGE?8388608u:SURFACE_NOTES?3145728u:SURFACE_DIFF?1048576u:SURFACE_READER?786432u:SURFACE_DESKTOP?786432u:262144u) + 65536u + 4096u + SURFACE_LCD_ENABLE * 1536000u)
+#endif
 /** @brief Diagnostic counters copied without exposing SDK types to firmware.
  * @note live_bytes counts allocation payloads. peak_bytes is the highest used
  * offset in the reserved region, including runtime state, alignment and gaps. */
@@ -75,6 +86,34 @@ int surface_runtime_preferences(surface_preferences_t *,unsigned *);
 int surface_runtime_set_preferences(const surface_preferences_t *);
 /** @brief Copy runtime counters, including the completed stop result. */
 void surface_runtime_stats(surface_runtime_stats_t *out);
+#if SURFACE_NATIVE_DESKTOP
+/** @brief Print the panel's front buffer on the console as run-length rows,
+ *  holding new frames until it is printed; zero when a capture is running. */
+int surface_runtime_capture(void);
+/** @brief Queue a pointer event as touch would: @p kind is 'd' (down), 'm'
+ *  (move), 'u' (up), 't' (down then up) or 'D' (two taps) at panel point
+ *  @p x, @p y; zero
+ *  when the runtime is stopped or the point is off the panel. */
+int surface_runtime_inject(char kind, unsigned x, unsigned y);
+/** @brief Queue a drag as touch would: down at @p x0, @p y0, eight moves to
+ *  @p x1, @p y1, then up; zero when a point is off the panel. */
+int surface_runtime_drag(unsigned x0, unsigned y0, unsigned x1, unsigned y1);
+/** @brief Print the last 4096 program counters of the preempted desktop
+ *  thread, a line per kernel turn; zero while a dump or capture runs. */
+int surface_runtime_samples(void);
+/** @brief Take 1024 stack samples of the preempted desktop thread, one per
+ *  kernel turn, then print them; zero while a request is running. */
+int surface_runtime_stacks(void);
+/** @brief Ask the desktop for its report (frame statistics, mounts, the
+ *  trail), which it prints on the console at its next turn. */
+int surface_runtime_report(void);
+/** @brief Ask the desktop to print the size and SHA-256 of the file at
+ *  @p path (@p length bytes, fewer than 64) in its own tree. */
+int surface_runtime_hash(const char *path, size_t length);
+/** @brief Print the heap profile on the console; zero when the build
+ *  records none (SURFACE_HEAP_PROFILE=0). */
+int surface_runtime_heap_report(void);
+#endif
 /** @brief Fail the specified one-based allocation attempt; zero disables injection. */
 void surface_runtime_fail_at(unsigned attempt);
 /** @brief Firmware PSRAM reservation, 64-byte aligned; exclusive until release. */

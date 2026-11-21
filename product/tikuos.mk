@@ -9,6 +9,10 @@ endif
 ifeq ($(TIKU_APPL_GUI),1)
 $(error TikuSurface and the remote GUI cannot be selected together)
 endif
+SURFACE_NATIVE_DESKTOP ?= 0
+ifeq ($(SURFACE_NATIVE_DESKTOP),1)
+include $(SURFACE_ROOT)/desktop/firmware.mk
+else
 S31_UI_LTO ?= 0
 S31_SURFACE_LCD ?= 0
 SURFACE_TRANSFERS ?= 0
@@ -346,3 +350,4 @@ $(APPL_LINKER): arch/esp32s31/radio_flash.ld $(SURFACE_ROOT)/tools/surface_linke
 	python3 $(SURFACE_ROOT)/tools/surface_linker.py --base $< --output $@ $(if $(filter 1,$(SURFACE_TRANSFER_SERVICE)),--transfer,)
 .DELETE_ON_ERROR: $(S31_DIR)/kernel.elf
 -include $(SURFACE_UI_OBJS:.o=.d)
+endif

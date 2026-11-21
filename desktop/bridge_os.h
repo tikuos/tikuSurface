@@ -1,0 +1,48 @@
+/*
+ * Authors: Ambuj Varshney <ambuj@tiku-os.org>
+ * bridge_os.h - firmware calls the desktop runtime and thread use.
+ *
+ * Defined by platform/tikuos/desktop_bindings.c with TikuOS headers; this
+ * header names no firmware or toolkit types, so both sides include it.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#ifndef SURFACE_DESKTOP_BRIDGE_OS_H
+#define SURFACE_DESKTOP_BRIDGE_OS_H
+#include <stddef.h>
+#include <stdint.h>
+
+/** @brief Start the desktop worker on a caller-owned stack; 0 on success.
+ *  @note Kernel owner only. */
+int surface_os_desktop_start(void (*entry)(void *), void *arg, void *stack, size_t bytes);
+/** @brief On the desktop thread: wait until @p ready returns nonzero, a wake
+ *         arrives or @p timeout_us passes; zero waits without a limit.
+ *  @p ready runs with interrupts masked. */
+void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us);
+/** @brief Wake the desktop thread from its wait; callable from the kernel. */
+void surface_os_desktop_wake(void);
+/** @brief Ask the kernel runtime for an owner turn; callable from the desktop thread. */
+void surface_os_desktop_kick(void);
+/** @brief End the desktop thread; never returns. */
+void surface_os_desktop_exit(void);
+/** @brief Write console text.  @note Kernel owner only. */
+void surface_os_desktop_print(const void *bytes, size_t length);
+/** @brief The PSRAM section holding the desktop's zero-initialized statics. */
+void surface_os_desktop_statics(void **base, size_t *bytes);
+/** @brief The desktop thread's interrupted program counter, read from its
+ *  saved frame while the kernel runs; zero when the thread is blocked in a
+ *  wait or has not started. */
+uintptr_t surface_os_desktop_sample(void);
+/** @brief Mount the SD card's native media volume without writing to it;
+ *  zero when mounted.  Kernel context only. */
+int surface_os_card_mount(void);
+/** @brief Whether the caller is the desktop thread. */
+int surface_os_in_desktop(void);
+/** @brief The preempted desktop thread's program counter, return address
+ *  and stack pointer from its saved frame; zero when it is not preempted. */
+int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp);
+/** @brief Fill @p bytes from the hardware random source; 0, or -1 on a fault. */
+int surface_os_desktop_random(void *bytes, size_t length);
+/** @brief Enter and leave the interrupt-masked section; calls nest. */
+void surface_os_desktop_lock(void);
+void surface_os_desktop_unlock(void);
+#endif
