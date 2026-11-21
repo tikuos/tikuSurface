@@ -6,11 +6,10 @@ It enables `SURFACE_DESKTOP`, `SURFACE_TEXT_INPUT`, `SURFACE_FILE_JOBS`,
 The core launch inventory contains Home, Tracker and Settings.
 
 The selected SDK must export `window-workspace` and `deskbar-paint` alongside
-the storage models and controls. These capabilities require a matching Stomme
-export; the current pinned SDK does not provide them. Pass the export through
-`SDK_ROOT` for host builds and `SURFACE_SDK` for firmware builds. Keep the
-foundation gitlink, lock revision and content hash together when adopting a
-published dependency revision.
+the storage models and controls. The pinned foundation exports both.
+`make sdk-host`, `make sdk-s31` and `make sdk-s31-lto` write the exports that
+host and firmware builds select by default; `SDK_ROOT` and `SURFACE_SDK` name
+another export.
 
 From the TikuSurface root:
 

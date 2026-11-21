@@ -1,6 +1,7 @@
 # Desktop application candidate
 
-The published foundation pin builds the base three-application product. The
+The published foundation pin builds the base three-application product and the
+[core desktop](core-desktop.md). The
 expanded desktop uses an explicitly exported candidate Stomme SDK and matching
 TikuOS storage, console and device interfaces. It is not a qualified release.
 The source repositories and dependency pin must be reviewed together before
