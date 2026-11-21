@@ -13,15 +13,24 @@ typedef struct {
     tiku_present_result_t (*poll)(void *, uint64_t);
 } surface_scanout_ops_t;
 
-/** @brief Serialized provider; caller retains buffers, operations and sequence storage. */
+/** @brief Rectangles a scanout buffer keeps apart while each pair's union
+ *  would be more than twice their area. */
+#define SURFACE_PRESENT_PARTS 2
+
+/**
+ * @brief Serialized provider; caller retains buffers, operations and sequence storage.
+ * @note pending lists the rectangles each buffer lacks. A frame converts its
+ * back buffer's parts, convert_px pixels, and submits their bounding region.
+ */
 typedef struct {
     uint16_t *buffers[2];
-    tiku_rect_t pending[2], region;
+    tiku_rect_t pending[2][SURFACE_PRESENT_PARTS], region;
     tiku_present_view_t source;
     const surface_scanout_ops_t *ops;
     void *context;
     uint64_t *sequence, ticket;
-    unsigned front, phase, failed, x, y, pixel_budget;
+    unsigned front, phase, failed, x, y, pixel_budget, part;
+    uint32_t convert_px;
 } surface_presentation_t;
 
 /**

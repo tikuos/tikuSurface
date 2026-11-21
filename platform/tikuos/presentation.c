@@ -26,6 +26,57 @@ static tiku_rect_t unite(tiku_rect_t a, tiku_rect_t b)
     return (tiku_rect_t){x, y, right - x, bottom - y};
 }
 
+/** @brief Pixels in a rectangle; zero width denotes empty. */
+static uint32_t area(tiku_rect_t r)
+{
+    return r.w > 0 ? (uint32_t)r.w * (uint32_t)r.h : 0u;
+}
+
+/**
+ * @brief Add @p r to one buffer's parts.
+ * @note Two parts merge while their union is at most twice their area; past
+ * SURFACE_PRESENT_PARTS the pair whose union adds the least area merges.
+ */
+static void add_part(tiku_rect_t *parts, tiku_rect_t r)
+{
+    tiku_rect_t all[SURFACE_PRESENT_PARTS + 1];
+    unsigned n = 0;
+    for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i)
+        if (parts[i].w) all[n++] = parts[i];
+    all[n++] = r;
+    for (;;) {
+        unsigned a = 0, b = 0, near = 0;
+        uint32_t least = UINT32_MAX;
+        for (unsigned i = 0; i < n && !near; ++i)
+            for (unsigned j = i + 1; j < n && !near; ++j) {
+                uint32_t joined = area(unite(all[i], all[j]));
+                uint32_t apart = area(all[i]) + area(all[j]);
+                uint32_t growth = joined > apart ? joined - apart : 0u;
+                near = joined <= 2u * apart;
+                if (near || growth < least) { a = i; b = j; least = growth; }
+            }
+        if (!near && n <= SURFACE_PRESENT_PARTS) break;
+        all[a] = unite(all[a], all[b]);
+        all[b] = all[--n];
+    }
+    for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i)
+        parts[i] = i < n ? all[i] : (tiku_rect_t){0};
+}
+
+/** @brief Step past converted parts of @p back; zero once none remains. */
+static int next_part(surface_presentation_t *p, unsigned back)
+{
+    while (p->part < SURFACE_PRESENT_PARTS && p->pending[back][p->part].w) {
+        tiku_rect_t r = p->pending[back][p->part];
+        if (p->y < (unsigned)(r.y + r.h)) return 1;
+        if (++p->part < SURFACE_PRESENT_PARTS) {
+            p->x = (unsigned)p->pending[back][p->part].x;
+            p->y = (unsigned)p->pending[back][p->part].y;
+        }
+    }
+    return 0;
+}
+
 int surface_presentation_init(surface_presentation_t *p, uint16_t *a, size_t an,
     uint16_t *b, size_t bn, unsigned front, unsigned budget, uint64_t *sequence,
     const surface_scanout_ops_t *ops, void *context)
@@ -36,7 +87,7 @@ int surface_presentation_init(surface_presentation_t *p, uint16_t *a, size_t an,
         !sequence || !ops || !ops->submit || !ops->poll) return 0;
     *p = (surface_presentation_t){.buffers = {a, b}, .front = front,
         .pixel_budget = budget, .sequence = sequence, .ops = ops, .context = context,
-        .pending = {{0, 0, 800, 480}, {0, 0, 800, 480}}};
+        .pending = {{{0, 0, 800, 480}}, {{0, 0, 800, 480}}}};
     return 1;
 }
 
@@ -55,9 +106,13 @@ tiku_present_result_t surface_presentation_submit(void *context, const tiku_pres
         !disjoint(v->pixels, v->bytes, p->buffers[0], RGB_BYTES) ||
         !disjoint(v->pixels, v->bytes, p->buffers[1], RGB_BYTES)) return TIKU_PRESENT_ERROR;
     p->source = *v;
-    for (unsigned i = 0; i < 2; ++i) p->pending[i] = unite(p->pending[i], v->damage);
-    p->region = p->pending[p->front ^ 1u];
-    p->x = (unsigned)p->region.x; p->y = (unsigned)p->region.y;
+    for (unsigned i = 0; i < 2; ++i) add_part(p->pending[i], v->damage);
+    const tiku_rect_t *parts = p->pending[p->front ^ 1u];
+    p->region = (tiku_rect_t){0}; p->convert_px = 0;
+    for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i)
+        if (parts[i].w) { p->region = unite(p->region, parts[i]); p->convert_px += area(parts[i]); }
+    p->part = 0;
+    p->x = (unsigned)parts[0].x; p->y = (unsigned)parts[0].y;
     p->phase = CONVERT;
     return TIKU_PRESENT_OK;
 }
@@ -82,10 +137,10 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
     if (p->failed) return TIKU_PRESENT_BUSY;
     unsigned back = p->front ^ 1u;
     if (p->phase == CONVERT) {
-        unsigned right = (unsigned)(p->region.x + p->region.w);
-        unsigned bottom = (unsigned)(p->region.y + p->region.h);
         unsigned remaining = p->pixel_budget;
-        while (remaining && p->y < bottom) {
+        while (remaining && next_part(p, back)) {
+            tiku_rect_t r = p->pending[back][p->part];
+            unsigned right = (unsigned)(r.x + r.w);
             const uint32_t *row = (const uint32_t *)((const unsigned char *)p->source.pixels + p->y * p->source.stride);
             unsigned count = right - p->x;
             if (count > remaining) count = remaining;
@@ -98,9 +153,9 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
             }
             p->x += count;
             remaining -= count;
-            if (p->x == right) { p->x = (unsigned)p->region.x; ++p->y; }
+            if (p->x == right) { p->x = (unsigned)r.x; ++p->y; }
         }
-        if (p->y == bottom) p->phase = SUBMIT;
+        if (!next_part(p, back)) p->phase = SUBMIT;
         return TIKU_PRESENT_BUSY;
     }
     if (p->phase == SUBMIT) {
@@ -116,7 +171,7 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
     tiku_present_result_t result = p->ops->poll(p->context, p->ticket);
     if (result == TIKU_PRESENT_OK) {
         p->front = back;
-        p->pending[back] = (tiku_rect_t){0};
+        for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i) p->pending[back][i] = (tiku_rect_t){0};
     }
     if (result != TIKU_PRESENT_OK && result != TIKU_PRESENT_ERROR) return TIKU_PRESENT_BUSY;
     return complete(p, result);

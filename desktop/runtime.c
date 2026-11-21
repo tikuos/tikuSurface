@@ -745,7 +745,7 @@ int surface_runtime_poll(void)
             if (rt.phase_seen != 0u && rt.phase_seen < 4u)
                 rt.phase_us[rt.phase_seen] = (uint32_t)(t - rt.phase_at);
             if (before == 1u) {
-                rt.region_px = (uint32_t)(rt.presentation.region.w * rt.presentation.region.h);
+                rt.region_px = rt.presentation.convert_px;
                 rt.convert_cpu = 0;
             }
             if (rt.phase_seen == 1u) rt.convert_cpu_last = rt.convert_cpu;

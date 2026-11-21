@@ -47,13 +47,14 @@ static void color(tiku_rect_t r, uint32_t input, uint16_t output)
     }
 }
 
-/** @brief Convert until transport submission with a finite work bound. */
-static void convert(surface_presentation_t *p)
+/** @brief Convert until transport submission with a finite work bound; return the polls. */
+static unsigned convert(surface_presentation_t *p)
 {
-    unsigned before = submits;
-    for (unsigned i = 0; i < 4000 && submits == before; ++i)
+    unsigned before = submits, polls = 0;
+    for (unsigned i = 0; i < 4000 && submits == before; ++i, ++polls)
         assert(surface_presentation_poll(p) == TIKU_PRESENT_BUSY);
     assert(submits == before + 1);
+    return polls;
 }
 
 /** @brief Compare complete scanout buffers after disjoint damage alternates their age. */
@@ -89,10 +90,15 @@ static void frames(void)
             assert(!memcmp(scanout[1], expected, 1024 * sizeof(uint16_t)));
             for (unsigned i = 1024; i < 800 * 480; ++i) assert(scanout[1][i] == 0xdead);
         }
-        convert(&p);
+        unsigned polls = convert(&p);
         assert(target == (previous ^ 1u));
         assert(!memcmp(scanout[target], expected, sizeof expected));
         if (f < 2) assert(damage.x == 0 && damage.y == 0 && damage.w == 800 && damage.h == 480);
+        /* A buffer lacking two far-apart rectangles converts each, at most
+         * 1280 pixels here, and the transport is given their bounds. */
+        if (f >= 2) assert(polls <= 3);
+        if (f == 2) assert(p.convert_px == 15 + 551 && damage.x == 3 && damage.y == 7 &&
+            damage.w == 796 && damage.h == 472);
         assert(surface_presentation_poll(&p) == TIKU_PRESENT_BUSY && p.front == previous);
         completion_result = (tiku_present_result_t)99;
         assert(surface_presentation_poll(&p) == TIKU_PRESENT_BUSY && !tiku_framebuffer_begin(frame, NULL));
@@ -185,6 +191,6 @@ static void layouts_and_retries(void)
 int main(void)
 {
     frames(); refusals_and_errors(); layouts_and_retries();
-    puts("Presentation: bounded conversion, colors, buffer age, source leases and faults passed");
+    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases and faults passed");
     return 0;
 }
