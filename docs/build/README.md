@@ -65,16 +65,19 @@ Build the diagnostic runtime from the TikuOS root after exporting its SDK:
 
 ```sh
 make MCU=esp32s31 S31_PROFILE=s31-local \
+    S31_APPLICATION_MANIFEST=tikuSurface/product/tikuos.mk \
     CROSS_COMPILE=/path/to/riscv32-esp-elf- PYTHON=/path/to/venv/bin/python
 make MCU=esp32s31 S31_PROFILE=s31-connected S31_WIFI_COUNTRY=SG \
+    S31_APPLICATION_MANIFEST=tikuSurface/product/tikuos.mk \
     CROSS_COMPILE=/path/to/riscv32-esp-elf- PYTHON=/path/to/venv/bin/python
 ```
 
 Use the Wi-Fi country code for the deployment location. The connected profile
 requires the port's verified Wi-Fi/PHY and SAE assets. The local profile uses
 ROM symbol declarations from the driver checkout without linking radio archives.
-Both select 80 MHz PSRAM and the `tikuSurface/product/tikuos.mk` manifest through
-`S31_APPLICATION_MANIFEST`. Missing product or SDK inputs are configuration errors.
+Both select 80 MHz PSRAM. `S31_APPLICATION_MANIFEST` names this manifest; the
+profiles refuse to build without it. Missing product or SDK inputs are
+configuration errors.
 The remote GUI flag `TIKU_APPL_GUI=1` cannot accompany these profiles.
 
 For UI/SDK LTO, export `sdk-s31-lto` and add `S31_UI_LTO=1`. Use a distinct

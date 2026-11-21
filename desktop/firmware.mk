@@ -24,6 +24,7 @@ APPL_SRCS += interfaces/display/tiku_display.c interfaces/display/tiku_display_a
     arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_dma_arch.c
 APPL_CFLAGS := -DTIKU_APPLICATION_HEADER='"$(SURFACE_ROOT)/platform/tikuos/boot.h"'
 APPL_CFLAGS += -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DSURFACE_DESKTOP=1
+APPL_CFLAGS += -DTIKU_APPLICATION_PROJECT='"tikusurface_s31_lcd"'
 APPL_CFLAGS += -DTIKU_I2C_BUDGET_ENABLE=1 -DTIKU_TFS_ASYNC_ENABLE=1 -DTIKU_S31_STORAGE_ASYNC_ENABLE=1
 # The SD card's native media volume, reached through the queued media
 # bridge; flat names, as the card was written.

@@ -36,6 +36,7 @@ From the matching TikuOS root, with the product at `tikuSurface/`:
 
 ```sh
 make MCU=esp32s31 S31_PROFILE=s31-local S31_SURFACE_LCD=1 \
+    S31_APPLICATION_MANIFEST=tikuSurface/product/tikuos.mk \
     S31_DIR=build/surface-core-local S31_CPU_MHZ=160 \
     CROSS_COMPILE=/path/to/riscv32-esp-elf- PYTHON=/path/to/venv/bin/python \
     SURFACE_SDK=/path/to/s31-sdk \

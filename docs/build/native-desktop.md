@@ -10,6 +10,7 @@ From the matching TikuOS root, with TikuSurface at `tikuSurface/`:
 
 ```sh
 make MCU=esp32s31 S31_PROFILE=s31-local S31_SURFACE_LCD=1 S31_CPU_MHZ=160 \
+    S31_APPLICATION_MANIFEST=tikuSurface/product/tikuos.mk \
     SURFACE_NATIVE_DESKTOP=1 S31_DIR=build/desktop-native-local \
     DESKTOP_ASSETS=/path/to/TikuDesktop \
     CROSS_COMPILE=/path/to/riscv32-esp-elf- PYTHON=/path/to/venv/bin/python all

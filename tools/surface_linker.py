@@ -86,6 +86,7 @@ def native_desktop(script):
     if script.count(anchor) != 1:
         raise ValueError('Firmware uninit anchor changed; review the desktop statics')
     section = ('    .surface_psram (NOLOAD) : ALIGN(64) {\n'
+               '        __tiku_s31_psram_statics_start = .;\n'
                '        __surface_psram_bss_start = .;\n'
                '        *surface-ui.o(.bss .bss.* COMMON)\n'
                '        . = ALIGN(64);\n'
