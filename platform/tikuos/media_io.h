@@ -44,4 +44,8 @@ int surface_os_media_submit(void *, surface_media_io_t *);
 int surface_os_media_poll(void *);
 /** @brief Cancel this bridge's queued operation and drain an older owner; nonzero permits retirement. */
 int surface_os_media_cancel(void *);
+/** @brief On an owner turn with no request: close a card session left
+ *  parked longer than the build's linger; 0, or TIKU_MFS_BUSY or
+ *  TIKU_MFS_IO from closing it. */
+int surface_os_media_idle(void *);
 #endif

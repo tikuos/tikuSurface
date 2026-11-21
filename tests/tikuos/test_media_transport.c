@@ -18,6 +18,14 @@ int tiku_s31_sd_open_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card)
     assert(!opened);opened=1;++begins;*op=(tiku_s31_sd_async_t){.state=1,.card=card};
     *card=(tiku_s31_sdcard_t){.sectors=32768};card->cid[0]=(uint8_t)(wrong_card?2:1);return 1;
 }
+static unsigned verifies,sync_opens,refuse_verify;
+static uint64_t now_ticks;
+int tiku_s31_sd_verify_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card)
+{ if(refuse_verify)return TIKU_S31_SD_INVALID;assert(opened && card);++verifies;*op=(tiku_s31_sd_async_t){.state=6,.card=card};card->cid[0]=(uint8_t)(wrong_card?2:1);return 1; }
+uint64_t tiku_s31_time(void) { return now_ticks; }
+int tiku_s31_sdcard_open(tiku_s31_sdcard_t *card)
+{ assert(!opened);opened=1;++sync_opens;*card=(tiku_s31_sdcard_t){.sectors=32768};card->cid[0]=1;return 0; }
+int tiku_s31_sdcard_clock(tiku_s31_sdcard_t *card,uint32_t hz) { assert(opened && card && hz==4000000);return 0; }
 int tiku_s31_sd_clock_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card,uint32_t hz)
 { assert(opened && card==op->card && hz==4000000);op->state=2;return 1; }
 int tiku_s31_sd_read_begin(tiku_s31_sd_async_t *op,tiku_s31_sdcard_t *card,uint32_t lba,void *out)
@@ -94,5 +102,59 @@ int main(void)
     backend.first=32767;
     assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
     assert(tiku_s31_mfs_async_poll(&op)==TIKU_MFS_STALE && !backend.active && !opened);
-    puts("Media transport: retained read session, CID/extent checks, cancellation and refusal ownership pass");
+    /* A finished read session is parked: the card stays open, and the next
+     * acquire reads its CID again instead of power-cycling it. */
+    assert(!tiku_s31_mfs_block_init(&backend,100,1000,cid,4000000));
+    begins=closed=reads=verifies=0;authorized=0;
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(tiku_s31_mfs_async_read(&op,1,1,output)==1 && !tiku_s31_mfs_async_poll(&op));
+    now_ticks=1000;
+    assert(!tiku_s31_mfs_async_park(&op) && backend.parked && !backend.active && opened && !closed);
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1 && backend.active==2 && !backend.parked);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(begins==1 && verifies==1 && opened && !closed);
+    assert(tiku_s31_mfs_async_read(&op,2,1,output)==1 && !tiku_s31_mfs_async_poll(&op) && physical==102);
+    /* Another card answering at the next acquire is refused and closed. */
+    assert(!tiku_s31_mfs_async_park(&op) && backend.parked);
+    wrong_card=1;
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==TIKU_MFS_STALE && !backend.active && !backend.parked &&
+           !opened && closed==1);
+    wrong_card=0;
+    /* Expiry closes a parked session once the linger has passed, not before. */
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    now_ticks=5000;assert(!tiku_s31_mfs_async_park(&op) && backend.parked);
+    now_ticks=5999;assert(!tiku_s31_mfs_async_expire(&backend,1000) && backend.parked && opened);
+    now_ticks=6000;assert(!tiku_s31_mfs_async_expire(&backend,1000) && !backend.parked && !opened && closed==2);
+    /* A write-enabled session is closed, not parked. */
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(!tiku_s31_mfs_async_write_enable(&op) && backend.active==3);
+    assert(!tiku_s31_mfs_async_park(&op) && !backend.parked && !backend.active && !opened && closed==3);
+    /* The synchronous path closes a parked session before it opens the card. */
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(!tiku_s31_mfs_async_park(&op) && backend.parked);
+    assert(!tiku_s31_mfs_block_acquire(&backend) && !backend.parked && backend.active==1 &&
+           closed==4 && sync_opens==1);
+    assert(!tiku_s31_mfs_block_release(&backend) && !backend.active && !opened && closed==5);
+    /* A parked card that fails the CID read is power-cycled and identified
+     * afresh in the same session; one that refuses it is closed first. */
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1);
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(!tiku_s31_mfs_async_park(&op) && backend.parked);
+    unsigned opens=begins,checks=verifies;
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1 && verifies==checks+1);
+    fail_io=1;assert(tiku_s31_mfs_async_poll(&op)==1 && begins==opens+1 && opened && closed==6);fail_io=0;
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op) && backend.active==2);
+    assert(!tiku_s31_mfs_async_park(&op) && backend.parked);
+    refuse_verify=1;
+    assert(tiku_s31_mfs_async_acquire(&op,&backend)==1 && closed==7 && begins==opens+2 && !backend.parked);
+    refuse_verify=0;
+    assert(tiku_s31_mfs_async_poll(&op)==1 && !tiku_s31_mfs_async_poll(&op));
+    assert(!tiku_s31_mfs_async_close(&op) && !backend.active && !opened);
+    puts("Media transport: retained read session, CID/extent checks, cancellation, refusal ownership "
+         "and parked sessions pass");
 }

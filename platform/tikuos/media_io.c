@@ -132,6 +132,13 @@ int surface_os_media_poll(void *data)
     return 1;
 }
 
+int surface_os_media_idle(void *data)
+{
+    media_bridge_t *b = data;
+    if (!b || !b->ready || !surface_os_in_owner() || b->view) return 0;
+    return tiku_media_card_park_expire();
+}
+
 int surface_os_media_cancel(void *data)
 {
     media_bridge_t *b = data;

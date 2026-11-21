@@ -153,6 +153,24 @@ int main(void)
     assert(tiku_s31_sdcard_read(7,out,&card)==TIKU_S31_SD_INVALID);
     assert(!drain(&op) && !memcmp(out,sector,512) && card.reads==1 && batch_max==64);
     assert(tiku_s31_sd_poll(&op)==TIKU_S31_SD_INVALID);
+    {   /* Verification reads the open card's CID again with one command and
+         * no reset; a card that stops answering fails and is released. */
+        unsigned before=commands;card.cid[0]=0;
+        assert(tiku_s31_sd_verify_begin(&op,&card)==1);
+        assert(!drain(&op) && commands==before+1 && card.cid[0]==0x12 && card.sectors==32768);
+        assert(claims==4 && bus_open);
+        no_response=1;assert(tiku_s31_sd_verify_begin(&op,&card)==1);
+        assert(drain(&op)==TIKU_S31_SD_TIMEOUT && !claims && !bus_open);no_response=0;
+        assert(tiku_s31_sd_verify_begin(&op,&card)==TIKU_S31_SD_INVALID);
+        for(unsigned stop=0;stop<40;stop++){
+            open_card(&op,&card);assert(tiku_s31_sd_verify_begin(&op,&card)==1);
+            unsigned i;for(i=0;i<stop;i++)if(step(&op)!=1)break;
+            if(i==stop)assert(!tiku_s31_sd_cancel(&op));else assert(!tiku_s31_sdcard_close(&card));
+            assert(!claims && !bus_open);
+        }
+        open_card(&op,&card);
+        assert(tiku_s31_sd_clock_begin(&op,&card,20000000)==1 && !drain(&op));
+    }
     memset(out,0x55,sizeof out);bad_crc=1;
     assert(tiku_s31_sd_read_begin(&op,&card,7,out)==1 && drain(&op)==TIKU_S31_SD_IO);
     for(unsigned i=0;i<512;i++)assert(out[i]==0x55);
@@ -222,5 +240,5 @@ int main(void)
         bad_write_response=busy_forever=bad_status=fail_spi=0;
     }
     kernel=0;assert(tiku_s31_sd_open_begin(&op,&card)==TIKU_S31_SD_INVALID);
-    puts("SD: read/write CRC, status, authorization, bounded phases, cancellation, fault reset and wrap pass");
+    puts("SD: read/write CRC, status, authorization, identity re-reads, bounded phases, cancellation, fault reset and wrap pass");
 }

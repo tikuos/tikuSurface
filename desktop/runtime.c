@@ -188,6 +188,7 @@ static _Alignas(8) unsigned char card_bridge[SURFACE_MEDIA_BRIDGE_BYTES];
 static unsigned card_submitted;   /* the token submitted to the bridge, or 0 */
 static uint64_t card_began;       /* when the pending request was first seen */
 static uint32_t card_requests, card_polls, card_last_us, card_max_us; /* for the status line */
+static uint64_t card_total_us;    /* time all finished requests took */
 #define CARD_TURN_US 2000u        /* time a card request may take per kernel
                                    * turn, after the presentation's */
 
@@ -236,6 +237,7 @@ static int card_step(void)
     card_submitted = 0;
     card_requests++;
     card_last_us = (uint32_t)(surface_os_time() - card_began);
+    card_total_us += card_last_us;
     if (card_last_us > card_max_us) card_max_us = card_last_us;
     card_began = 0;
     b->card_done = token;
@@ -771,6 +773,9 @@ int surface_runtime_poll(void)
             break;
         }
     }
+    /* A card session left open for the next request is closed once it
+     * has lingered past the build's limit. */
+    if (!card_pending() && surface_desktop_bridge.card_mounted) (void)surface_os_media_idle(card_bridge);
     if (woke) surface_os_desktop_wake();
     if (rt.capturing) {
         capture_row();
@@ -817,7 +822,7 @@ int surface_runtime_poll(void)
                      "desktop: turns=%lu frames=%lu waits=%lu events=%u/%u present=%lu/%lu phase=%u max_us=%lu"
                      " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
-                     " card=%lu/%lu/%lu/%lu mutations=%lu\n",
+                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
                      b->event_head, b->event_tail, (unsigned long)b->frame_token,
                      (unsigned long)b->done_token, rt.presentation.phase,
@@ -831,7 +836,7 @@ int surface_runtime_poll(void)
                      (unsigned long)rt.phase_us[3], (unsigned long)rt.region_px,
                      (unsigned long)rt.convert_cpu_last, (unsigned long)card_requests,
                      (unsigned long)card_polls, (unsigned long)card_last_us, (unsigned long)card_max_us,
-                     (unsigned long)mutations);
+                     (unsigned long)(card_total_us / 1000u), (unsigned long)mutations);
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);
     }
     if (b->exited == 1) {

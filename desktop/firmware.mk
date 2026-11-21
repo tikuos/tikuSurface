@@ -26,6 +26,11 @@ APPL_CFLAGS := -DTIKU_APPLICATION_HEADER='"$(SURFACE_ROOT)/platform/tikuos/boot.
 APPL_CFLAGS += -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DSURFACE_DESKTOP=1
 APPL_CFLAGS += -DTIKU_APPLICATION_PROJECT='"tikusurface_s31_lcd"'
 APPL_CFLAGS += -DTIKU_I2C_BUDGET_ENABLE=1 -DTIKU_TFS_ASYNC_ENABLE=1 -DTIKU_S31_STORAGE_ASYNC_ENABLE=1
+# A finished card read leaves the card initialized for SURFACE_CARD_PARK_MS,
+# so a folder's listing and reads do not each power-cycle and identify it
+# again; 0 closes the card after every request.
+SURFACE_CARD_PARK_MS ?= 2000
+APPL_CFLAGS += -DTIKU_S31_SD_PARK_MS=$(SURFACE_CARD_PARK_MS)
 # The SD card's native media volume, reached through the queued media
 # bridge; flat names, as the card was written.
 APPL_SRCS += $(SURFACE_ROOT)/platform/tikuos/media_io.c services/storage/tiku_media_async.c \

@@ -32,7 +32,10 @@ static int write_disk(void *ctx, uint64_t lba, uint32_t n, const void *in)
 { (void)ctx; if (offline || lba + n > DISK_BYTES / 512) return -1; memcpy(disk+lba*512,in,n*512); return 0; }
 /** @brief Model an ordered successful persistence barrier. */
 static int sync_disk(void *ctx) { (void)ctx; return offline ? -1 : 0; }
-int surface_os_in_owner(void) { return 1; }
+static unsigned foreign, park_expiries;
+int surface_os_in_owner(void) { return !foreign; }
+/** @brief Count the bridge's idle calls into the card service. */
+int tiku_media_card_park_expire(void) { ++park_expiries; return 0; }
 tiku_media_store_t *tiku_media_card_store(void) { return fs.mounted ? &store : NULL; }
 /** @brief Polled in-memory transport keeps ownership across delayed sector completion. */
 typedef struct {
@@ -357,7 +360,14 @@ static void bridge_mutations(void)
 {
     reset();file("before");void *bridge=calloc(1,surface_os_media_size());assert(bridge);surface_os_media_init(bridge);
     surface_media_io_t io={.operation=SURFACE_MEDIA_ENUMERATE};
-    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);bridge_drain(bridge);
+    /* Idle turns reach the card service only from the owner, with no
+     * request in the bridge. */
+    park_expiries=0;assert(!surface_os_media_idle(NULL)&&!park_expiries);
+    foreign=1;assert(!surface_os_media_idle(bridge)&&!park_expiries);foreign=0;
+    assert(!surface_os_media_idle(bridge)&&park_expiries==1);
+    assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);
+    assert(!surface_os_media_idle(bridge)&&park_expiries==1);bridge_drain(bridge);
+    assert(!surface_os_media_idle(bridge)&&park_expiries==2);
     assert(io.result==SURFACE_MEDIA_OK&&io.id&&!strcmp(io.found,"before"));uint64_t id=io.id;
     io=(surface_media_io_t){.operation=SURFACE_MEDIA_RENAME,.id=id};strcpy(io.name,"before");strcpy(io.destination,"after");
     assert(surface_os_media_submit(bridge,&io)==SURFACE_MEDIA_OK);bridge_drain(bridge);assert(io.result==SURFACE_MEDIA_OK);
