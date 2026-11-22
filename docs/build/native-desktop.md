@@ -54,7 +54,11 @@ The desktop's files live in a tree in its heap: `/home` with `Desktop`,
 volume kit reads. The tree is built again at each start, and a read-only
 `Files here are lost at restart.txt` in `Desktop` and `Documents` says so. `/Card` shows the SD
 card's media volume read-only through the queued media bridge; a write there
-returns `EROFS`. `/dev/urandom` and `/dev/random` return SHA-256 counter-mode
+returns `EROFS`. `/Board` is the kernel's namespace, `/sys`, `/dev`, `/data`
+and the rest, read through TikuOS's `compat/posix` (`desktop/firmware.mk`
+selects it and leaves the library's own file hooks out); a change under it
+returns `EROFS`. Tracker lists it as a volume in the root window.
+`/dev/urandom` and `/dev/random` return SHA-256 counter-mode
 output from a key seeded once at start. Tracker starts with image thumbnails off.
 
 ## Limits

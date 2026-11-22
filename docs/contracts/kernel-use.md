@@ -27,6 +27,7 @@ describes.
 | Wall-clock time | `tiku_rtc_read`, through TikuOS's `compat/posix` `clock_gettime`, `gettimeofday` and `time` | Linked with `TIKU_POSIX_ENABLE := 1`, `desktop/firmware.mk` | Desktop thread | Durable |
 | The clock's standing | `tiku_rtc_state`: unset, set this boot, or resumed after a restart | `surface_os_clock_state()`; the Deskbar's `tiku_shell_clock_state()`; file times are 0 while unset | Desktop thread | Boot |
 | SD card, reading | Media card service: mount, enumerate, open, read | `platform/tikuos/media_io.c` | Owner turn | Card |
+| The kernel's namespace, read | `/Board` in the desktop's tree: `compat/posix`'s read group over `tiku_vfs_read_at` and `tiku_vfs_list`, each call on the kernel thread through `tiku_thread_call` | `desktop/posix.c` routes `/Board` paths to `tiku_posix_*`; changes are refused with `EROFS` | Desktop thread | Call |
 | Touch calibration | File store record `tikusurface-cal-v1` in `/data` | `platform/tikuos/settings_io.c` | Owner turn | Durable |
 | Random source | `tiku_trng_arch_read_bytes` | `surface_os_desktop_random()` | Desktop thread | Seed |
 | Console output | `tiku_console_write` | `surface_os_desktop_print()` | Owner turn | Line |
@@ -40,7 +41,7 @@ describes.
 | Desktop settings and per-file state | Files in that tree: `TrackerSettings`, `tracker/types`, `devices/local.state` | As above; lost at every restart | `/data` |
 | The desktop's heap | newlib's allocator over the arena, `_sbrk_r` in `desktop/posix.c` | The kernel gives no C-library heap by design; the arena is the kernel's | Stays |
 | Random numbers for the desktop | SHA-256 in counter mode over a TRNG seed, `desktop/posix.c` | `/dev/urandom` for the desktop's tree | Stays with the file layer |
-| Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash | TikuOS has no path for a worker's request into kernel context | A kernel request path |
+| Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash | Written before the kernel had a path for a worker's request; `/Board` reads use the kernel's | `tiku_thread_call` |
 | Change notices | A counter of tree changes the desktop polls, `tiku_posix_mutations()` | Changes happen only in the desktop's own tree | `tiku_vfs_watch` and the VFS change ring |
 | Locks | `pthread_mutex_*` that succeed and do nothing, `desktop/posix.c` | Valid only while one thread calls the layer | Kernel wait queues |
 | Background work | Stomme's jobs run on the desktop thread (`tiku_work_inline.c`) | The threaded pool needs pthreads | Kernel worker threads |
@@ -49,9 +50,10 @@ describes.
 
 ## Not reached by the native desktop
 
-The kernel's namespace (`/sys`, `/dev`, `/data`), its processes and shell, the
-network and programs that open windows on a desktop are not visible to the
-native desktop. Starting a program is refused: `execvp` returns `ENOSYS`,
+Writes to the kernel's namespace, its change notices, its processes and
+shell, the network and programs that open windows on a desktop are not
+visible to the native desktop; the namespace itself is read-only under
+`/Board`. Starting a program is refused: `execvp` returns `ENOSYS`,
 and `fork` reaches libnosys's `_fork`, which does the same. Remote sessions are
 answered as absent (`desktop/absent.c`).
 The core image's shell reaches the namespace, the process table, the kernel's

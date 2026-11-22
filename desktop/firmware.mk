@@ -39,9 +39,12 @@ APPL_CFLAGS += -DTIKU_MEDIA_DIRECTORIES_ENABLE=0 -DTIKU_MEDIA_NAMES_ENABLE=1 \
     -DTIKU_MEDIA_ASYNC_ENABLE=1 -DTIKU_S31_SD_ASYNC_ENABLE=1
 S31_LDFLAGS += -Wl,-u,tiku_media_card_mutation_size,-u,tiku_media_card_mutation_init,-u,tiku_media_card_mutation_step,-u,tiku_media_card_mutation_idle,-u,tiku_media_card_mutation_cancel,-u,tiku_media_checkpoint_step,-u,tiku_media_checkpoint_cancel
 S31_LDFLAGS += -Wl,-u,tiku_s31_sd_open_begin,-u,tiku_s31_sd_read_begin,-u,tiku_s31_sd_clock_begin,-u,tiku_s31_sd_poll,-u,tiku_s31_sd_cancel,-u,tiku_s31_mfs_async_acquire,-u,tiku_s31_mfs_async_read,-u,tiku_s31_mfs_async_poll,-u,tiku_s31_mfs_async_close
-# The desktop's clock calls (clock_gettime, gettimeofday, time) come from
-# TikuOS's compat/posix library.
+# The desktop's clock calls (clock_gettime, gettimeofday, time) and its
+# reads of /Board, the kernel's namespace, come from TikuOS's compat/posix
+# library.  desktop/posix.c keeps the C library's file hooks, so the
+# library's are left out.
 TIKU_POSIX_ENABLE := 1
+TIKU_POSIX_FILE_HOOKS := 0
 APPL_EXTRA_OBJS := $(S31_DIR)/tikuSurface/surface-ui.o
 APPL_LINKER := $(S31_DIR)/surface.ld
 S31_LDFLAGS += -Wl,-u,tiku_application_stop,-u,surface_runtime_launch,-u,surface_runtime_fail_at

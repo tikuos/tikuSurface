@@ -31,7 +31,8 @@ DESKTOP_INCLUDES := $(addprefix -I$(F)/kits/,support device storage interface tr
     $(addprefix -I$(F)/packages/shell/system/,shared/core shared/ui shared/ui/commands shared/ui/windows \
         shared/ui/overlays shared/ui/input deskbar shared/shell shared/shell/adapters shared/shell/session desktop) \
     -I$(DESKTOP_ROOT)/system/product -I$(DESKTOP_ASSETS)/kits/translation -I$(DESKTOP_ROOT)/desktop \
-    -I$(DESKTOP_ROOT)/desktop/compat $(addprefix -I,$(wildcard $(F)/kits/*/portable))
+    -I$(DESKTOP_ROOT)/desktop/compat $(addprefix -I,$(wildcard $(F)/kits/*/portable)) \
+    -I$(abspath compat/posix)
 DESKTOP_ARCH ?= -march=rv32imafc_zicsr_zifencei -mabi=ilp32f
 # Bounds the shared shell sizes for a desktop computer, set for the panel's
 # PSRAM: entries per folder view, the largest state file an update reads,
