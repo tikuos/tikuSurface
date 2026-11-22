@@ -268,13 +268,14 @@ LCD_TEST_RUNTIME := $(if $(filter 1,$(SURFACE_IMAGE)),tests/runtime_image.c,$(if
 
 $(BUILD)/test-runtime-lcd: platform/tikuos/media.c platform/tikuos/media.h tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/runtime.c platform/tikuos/runtime.h platform/tikuos/presentation.c platform/tikuos/presentation.h platform/tikuos/display.h $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
 	$(CC) $(FLAGS) -DSURFACE_LCD_ENABLE=1 -Iplatform/tikuos tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/presentation.c platform/tikuos/media.c $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
-test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
+test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-posix-layer $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
 	$(BUILD)/test-product-acceptance theme
 	$(BUILD)/test-product-acceptance reset
 	$(BUILD)/test-product-acceptance states
 	$(BUILD)/test-settings
 	$(BUILD)/test-touch
 	$(BUILD)/test-gesture
+	$(BUILD)/test-posix-layer
 	$(BUILD)/test-surface
 	$(BUILD)/test-runtime
 	$(BUILD)/test-presentation
@@ -292,6 +293,20 @@ $(BUILD)/test-touch: $(BUILD)/identity.h tests/test_touch.c shell/touch.c shell/
 
 $(BUILD)/test-gesture: tests/test_gesture.c desktop/gesture.c desktop/gesture.h mk/host.mk | $(BUILD)
 	$(CC) -std=c11 -Wall -Wextra -Werror $(CFLAGS) -Idesktop tests/test_gesture.c desktop/gesture.c -o $@
+
+# The native desktop's file layer on the host: tests/posix_host/ stands in for
+# newlib's headers, and the sanitizers report what the layer does to memory.
+# The layer is built from the pinned foundation's kits, as desktop/desktop.mk
+# builds it, not from the exported SDK.  The host C library declares write()
+# as must-use and the mkstemp() family's templates as non-null; newlib does
+# neither, so those two warnings are off here.
+POSIX_LAYER_FLAGS := -std=gnu11 -Wall -Wextra -Werror -Wno-format-truncation -Wno-unused-result \
+    -Wno-nonnull-compare -O1 -g \
+    -fsanitize=address,undefined -fno-omit-frame-pointer -include tests/posix_host/rename.h \
+    -Itests/posix_host -Idesktop -Idesktop/compat -I$(SDK_ROOT)/include -Ifoundation/kits/support
+$(BUILD)/test-posix-layer: tests/test_posix_layer.c desktop/posix.c desktop/bridge.h desktop/bridge_os.h \
+    $(wildcard tests/posix_host/*.h) mk/host.mk | $(BUILD)
+	$(CC) $(POSIX_LAYER_FLAGS) tests/test_posix_layer.c desktop/posix.c -o $@
 
 $(BUILD)/test-settings: tests/test_settings.c $(PRODUCT) $(HOST) $(HEADERS) shell/settings.h | $(BUILD)
 	$(CC) $(FLAGS) tests/test_settings.c $(PRODUCT) $(HOST) $(SDK_LIBRARIES) -o $@

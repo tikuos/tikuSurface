@@ -179,11 +179,16 @@ static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
     return n;
 }
 
+static void streams_pass(const rnode_t *n);
+
+/** @brief Take @p n out of its directory; an open directory stream about to
+ *  return @p n goes on to the entry after it. */
 static void node_detach(rnode_t *n)
 {
     rnode_t **p;
 
     if (n->parent == NULL) return;
+    streams_pass(n);
     for (p = &n->parent->child; *p != NULL; p = &(*p)->next) {
         if (*p == n) {
             *p = n->next;
@@ -1111,7 +1116,9 @@ int rmdir(const char *path)
     }
     removed(n);
     node_detach(n);
-    node_free(n);
+    /* A stream still open on it keeps it until the last closedir(). */
+    if (n->opened) n->unlinked = 1;
+    else node_free(n);
     return 0;
 }
 
@@ -1359,12 +1366,26 @@ int mkstemp(char *tmpl) { return mkstemps(tmpl, 0); }
 /* DIRECTORIES                                                               */
 /*---------------------------------------------------------------------------*/
 
-typedef struct {
+typedef struct rdir {
     DIR base;
     rnode_t *dir, *at;
     int dots;
     struct dirent entry;
+    struct rdir *next;          /* the next open stream */
 } rdir_t;
+
+/* Every open directory stream, so that removing an entry can move a stream
+ * that is about to return it. */
+static rdir_t *streams;
+
+static void streams_pass(const rnode_t *n)
+{
+    rdir_t *d;
+
+    for (d = streams; d != NULL; d = d->next) {
+        if (d->at == n) d->at = n->next;
+    }
+}
 
 DIR *opendir(const char *path)
 {
@@ -1384,6 +1405,8 @@ DIR *opendir(const char *path)
     }
     d->dir = n;
     d->at = n->child;
+    d->next = streams;
+    streams = d;
     n->opened++;
     return &d->base;
 }
@@ -1422,13 +1445,21 @@ void rewinddir(DIR *dp)
 
 int closedir(DIR *dp)
 {
-    rdir_t *d = (rdir_t *)dp;
+    rdir_t *d = (rdir_t *)dp, **p;
 
     if (d == NULL) {
         errno = EBADF;
         return -1;
     }
-    d->dir->opened--;
+    for (p = &streams; *p != NULL; p = &(*p)->next) {
+        if (*p == d) {
+            *p = d->next;
+            break;
+        }
+    }
+    /* A directory removed while this stream held it is freed with the last
+     * stream. */
+    if (--d->dir->opened == 0 && d->dir->unlinked) node_free(d->dir);
     free(d);
     return 0;
 }
