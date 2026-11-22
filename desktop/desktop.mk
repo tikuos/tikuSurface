@@ -60,10 +60,10 @@ DESKTOP_CFLAGS := $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOU
     -DSURFACE_EPOCH=$(DESKTOP_EPOCH)LL -include $(DESKTOP_ROOT)/desktop/tikuos_libc.h \
     -include $(DESKTOP_GEN)/tiku_sdk_identity.h $(DESKTOP_LIMITS) $(DESKTOP_INCLUDES)
 
-# The shell prints with the format strings of system/product/tiku_shell_product.h;
-# an argument list that does not match its format is an error.  Possible
-# truncation by snprintf stays a warning.
-DESKTOP_SHELL_CFLAGS := -Werror=format -Wno-error=format-truncation
+# An argument list that does not match its format is an error in the shell,
+# which prints with the format strings of system/product/tiku_shell_product.h,
+# and in the kits.  Possible truncation by snprintf stays a warning.
+DESKTOP_FORMAT_CFLAGS := -Werror=format -Wno-error=format-truncation
 
 DESKTOP_OBJS := $(addprefix $(DESKTOP_BUILD)/shell/,$(DESKTOP_SHELL_SRCS:.c=.o)) \
     $(addprefix $(DESKTOP_BUILD)/kits/,$(DESKTOP_KIT_SRCS:.c=.o)) \
@@ -91,10 +91,10 @@ $(DESKTOP_GEN)/tiku_saslprep_tables.h:
 $(DESKTOP_BUILD)/shell/system/shared/shell/tiku_trk_launcher.o: private DESKTOP_EXTRA := -Dmain=surface_desktop_main
 $(DESKTOP_BUILD)/shell/%.o: $(F)/packages/shell/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
-	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_SHELL_CFLAGS) $(DESKTOP_EXTRA) -MMD -MP -c -o $@ $<
+	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_FORMAT_CFLAGS) $(DESKTOP_EXTRA) -MMD -MP -c -o $@ $<
 $(DESKTOP_BUILD)/kits/%.o: $(F)/kits/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
-	$(DESKTOP_CC) $(DESKTOP_CFLAGS) -MMD -MP -c -o $@ $<
+	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_FORMAT_CFLAGS) -MMD -MP -c -o $@ $<
 $(DESKTOP_BUILD)/assets/tiku_icons_tiku.o: $(DESKTOP_ASSETS)/kits/translation/tiku_icons_tiku.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) -MMD -MP -c -o $@ $<
