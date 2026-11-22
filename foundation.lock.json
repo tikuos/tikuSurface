@@ -1,8 +1,8 @@
 {
   "foundation_id": "desktop-foundation",
   "profile": "portable-ui",
-  "revision": "1d0a0aa74cb2f1d445006d188c9bd019e067a98f",
-  "source_sha256": "82fe2f6b9c044c5b9c07395e7d31c2411e31585a3ee9954a72d57daa202af7d0",
+  "revision": "3ce1736caa87d5067ad250c5a8a8b69841d661f7",
+  "source_sha256": "99f688b60540e7dd1b5c06a6dda489a758f750a81f4fc77d17c856662a44aecf",
   "revision_kind": "source-content",
   "remote": "https://github.com/tikuos/Stomme.git"
 }
