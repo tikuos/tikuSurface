@@ -44,7 +44,11 @@ APPL_LINKER := $(S31_DIR)/surface.ld
 S31_LDFLAGS += -Wl,-u,tiku_application_stop,-u,surface_runtime_launch,-u,surface_runtime_fail_at
 APPL_LINK_DEPS := $(SURFACE_ROOT)/product/tikuos.mk $(SURFACE_ROOT)/desktop/firmware.mk \
     $(SURFACE_ROOT)/tools/surface_linker.py
-APPL_CHECK_ELF = python3 $(SURFACE_ROOT)/tools/desktop_placement.py --elf $@ --map $(S31_DIR)/kernel.map
+# After the link: the desktop's code and statics are where the image expects
+# them, and no system call the desktop reaches comes from libnosys, whose
+# definitions return ENOSYS.  A failing check deletes the image.
+APPL_CHECK_ELF = python3 $(SURFACE_ROOT)/tools/desktop_placement.py --elf $@ --map $(S31_DIR)/kernel.map \
+    && python3 $(SURFACE_ROOT)/tools/libc_stubs.py --elf $@ --map $(S31_DIR)/kernel.map
 
 # The runtime's entry points and the C-library system calls the desktop
 # supplies; the archive contributes only the objects these reach.

@@ -17,6 +17,12 @@ make MCU=esp32s31 S31_PROFILE=s31-local S31_SURFACE_LCD=1 S31_CPU_MHZ=160 \
 ```
 
 The build refuses to start without `S31_SURFACE_LCD=1` and `S31_CPU_MHZ=160`.
+After the link, `tools/desktop_placement.py` checks where the desktop's code
+and statics landed, and `tools/libc_stubs.py` reads the link map for system
+calls taken from libnosys, whose definitions set `errno` to `ENOSYS`; a call
+the desktop needs that no object defines links without an error and fails
+when it runs. Kept libnosys calls other than `_execve`, `_fork`, `_kill` and
+`_wait` fail the build, and the image is deleted.
 `DESKTOP_ASSETS` names the TikuDesktop checkout that supplies the desktop's
 strings, sounds and icons. `DESKTOP_FOUNDATION` names the Stomme checkout and
 defaults to the pinned `foundation/`.
