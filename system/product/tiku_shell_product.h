@@ -8,6 +8,13 @@
 #define TIKU_SHELL_PRODUCT_H_
 /** @brief Enable board namespace, channel and device services. */
 #define TIKU_SHELL_BOARD_SERVICES 0
+#ifndef SURFACE_TOUCH_MODE
+#define SURFACE_TOUCH_MODE 1
+#endif
+/** @brief With the panel's touch mode, the shell's touch sizes and lens: the
+ *  16 px face, a count line and scroll bar that follow it, and a magnified
+ *  view for presses on small controls. */
+#define TIKU_SHELL_TOUCH SURFACE_TOUCH_MODE
 /** @brief Enable remote text input, accessibility, links and printing. */
 #define TIKU_SHELL_REMOTE_SERVICES 0
 /** @brief Enable note placement with automatic title-tab hiding. */
