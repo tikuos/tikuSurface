@@ -7,6 +7,7 @@
 #include "runtime.h"
 #include <interfaces/display/tiku_display.h>
 #include <arch/esp32s31/tiku_display_arch.h>
+#include <arch/esp32s31/tiku_psram_arch.h>
 #include <assert.h>
 #include <stdio.h>
 
@@ -43,6 +44,22 @@ int tiku_display_poll(tiku_display_t *d, uint64_t token)
     if (poll_result == TIKU_DISPLAY_OK) { void *old = d->front; d->front = d->fb; d->fb = old; }
     return poll_result;
 }
+static unsigned syncs, sync_error;
+static uintptr_t spans[8][2];
+int tiku_s31_psram_sync(void *address, uint32_t length, uint8_t invalidate)
+{
+    uintptr_t a = (uintptr_t)address;
+    assert(!invalidate && length && !(a % TIKU_S31_PSRAM_LINE) && !(length % TIKU_S31_PSRAM_LINE));
+    if (syncs < 8) { spans[syncs][0] = a; spans[syncs][1] = a + length; }
+    ++syncs; return sync_error;
+}
+/** @brief Whether sync span @p i covers row @p row's pixels @p x..x+w of buffer @p b. */
+static int covers(unsigned i, unsigned b, unsigned row, unsigned x, unsigned w)
+{
+    uintptr_t first = (uintptr_t)(pixels[b] + row * 800u + x);
+    return spans[i][0] <= first && spans[i][1] >= first + w * sizeof(uint16_t) &&
+        spans[i][1] - spans[i][0] <= w * sizeof(uint16_t) + 2u * TIKU_S31_PSRAM_LINE;
+}
 int tiku_s31_display_poll(tiku_s31_display_stats_t *stats)
 { assert(initialized && !stats); ++calls; return health_error; }
 int tiku_s31_display_close(tiku_display_t *d)
@@ -60,6 +77,7 @@ static void context_refusal(void)
     assert(surface_os_display_submit(1, 31, 4, 2, 3, 23) == SURFACE_SCANOUT_ERROR);
     assert(surface_os_display_poll(23) == SURFACE_SCANOUT_REFUSED);
     assert(!surface_os_display_close() && !surface_os_display_health());
+    assert(!surface_os_display_amend(0, 100, 200, 32, 3));
     assert(calls == before); owner = 1;
 }
 int main(void)
@@ -81,6 +99,15 @@ int main(void)
     assert(surface_os_display_open(pixels[0], pixels[1]));
     context_refusal();
     assert(!surface_os_display_open(pixels[0], pixels[1]));
+    /* The buffer on show takes a write-back row by row; the back buffer,
+     * a rectangle off the screen and a failed write-back are refused. */
+    assert(!surface_os_display_amend(1, 100, 200, 32, 3) && !syncs);
+    assert(!surface_os_display_amend(0, 790, 200, 32, 3) && !surface_os_display_amend(0, 100, 200, 0, 3));
+    assert(surface_os_display_amend(0, 100, 200, 32, 3) && syncs == 3);
+    for (unsigned i = 0; i < 3; ++i) assert(covers(i, 0, 200 + i, 100, 32));
+    sync_error = 1; syncs = 0;
+    assert(!surface_os_display_amend(0, 100, 200, 32, 3) && syncs == 1);
+    sync_error = 0; syncs = 0;
     assert(surface_os_display_health()); health_error = 1;
     assert(!surface_os_display_health()); health_error = 0;
     unsigned before = calls;
@@ -100,8 +127,10 @@ int main(void)
     assert(surface_os_display_poll(23) == SURFACE_SCANOUT_ERROR && initialized);
     poll_result = TIKU_DISPLAY_OK;
     assert(surface_os_display_poll(23) == SURFACE_SCANOUT_OK);
+    assert(!surface_os_display_amend(0, 0, 0, 800, 1) && surface_os_display_amend(1, 0, 479, 800, 1));
+    assert(syncs == 1 && covers(0, 1, 479, 0, 800));
     assert(surface_os_display_submit(1, 31, 4, 2, 3, 23) == SURFACE_SCANOUT_ERROR);
     assert(surface_os_display_close() && surface_os_display_close() && !initialized);
-    puts("Display binding: context, partial open, close retry, back buffer and terminal result mapping passed");
+    puts("Display binding: context, partial open, close retry, back buffer, shown-buffer write-back and terminal result mapping passed");
     return 0;
 }

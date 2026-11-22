@@ -21,6 +21,7 @@
 #include "../platform/tikuos/display.h"
 #include "../platform/tikuos/input.h"
 #include "../platform/tikuos/settings_io.h"
+#include "gesture.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -42,6 +43,11 @@
                                  * 4096-pixel conversions, or many 1,600-byte
                                  * rows of the cache write-back */
 #define TOUCH_EXPIRE_US 100000u
+#ifndef SURFACE_TOUCH_MODE
+/* 1: a mark under the finger from the first report, a slop before the
+ * pointer moves and double taps landing on the first tap; 0: raw contacts. */
+#define SURFACE_TOUCH_MODE 1
+#endif
 #define BURST_TURNS 32u         /* queued turns before the timer drives again */
 #define BURST_US 20000u
 #define STATUS_US 2000000u      /* console status line period */
@@ -90,6 +96,8 @@ static struct {
     unsigned map_status;
     int touch_active, touch_x, touch_y;
     unsigned touch_id;
+    surface_gesture_t gesture;
+    int touch_held;           /* a finger placed by the control file: kept until lift */
     uint64_t last_report, frame_started;
     surface_input_stats_t input;
     surface_frame_stats_t frame;
@@ -360,6 +368,9 @@ static void post(tiku_event_type_t type, int x, int y, uint64_t now)
     b->event_head = head + 1u;
 }
 
+static void release(uint64_t now);
+static int contact(int x, int y, unsigned id, uint64_t now);
+
 int surface_runtime_inject(char kind, unsigned x, unsigned y)
 {
     uint64_t now = surface_os_time();
@@ -378,6 +389,14 @@ int surface_runtime_inject(char kind, unsigned x, unsigned y)
         post(TIKU_EVENT_POINTER_UP, (int)x, (int)y, now);
         post(TIKU_EVENT_POINTER_DOWN, (int)x, (int)y, now);
         post(TIKU_EVENT_POINTER_UP, (int)x, (int)y, now);
+        break;
+    case 'f':
+        (void)contact((int)x, (int)y, 0u, now);
+        rt.touch_held = 1;
+        break;
+    case 'l':
+        if (rt.touch_active) release(now);
+        rt.touch_held = 0;
         break;
     default: return 0;
     }
@@ -418,6 +437,19 @@ static void map_point(unsigned rx, unsigned ry, int *x, int *y)
     if (m->invert_y) *y = 479 - *y;
 }
 
+/** @brief The finger left the panel: release the pointer where it is. */
+static void release(uint64_t now)
+{
+    int x = rt.touch_x, y = rt.touch_y;
+
+#if SURFACE_TOUCH_MODE
+    (void)surface_gesture_lift(&rt.gesture, now, &x, &y);
+    surface_presentation_mark(&rt.presentation, 0, 0, 0);
+#endif
+    post(TIKU_EVENT_POINTER_UP, x, y, now);
+    rt.touch_active = 0;
+}
+
 /** @brief One touch report as pointer down, move and up events. */
 static int touch(const surface_touch_report_t *r, uint64_t now)
 {
@@ -427,8 +459,7 @@ static int touch(const surface_touch_report_t *r, uint64_t now)
     if (r->cancel || r->count > SURFACE_TOUCH_CONTACTS) {
         rt.input.errors++;
         if (rt.touch_active) {
-            post(TIKU_EVENT_POINTER_UP, rt.touch_x, rt.touch_y, now);
-            rt.touch_active = 0;
+            release(now);
             return 1;
         }
         return 0;
@@ -436,9 +467,9 @@ static int touch(const surface_touch_report_t *r, uint64_t now)
     rt.input.contacts = r->count;
     rt.last_report = now;
     if (r->count == 0u) {
-        if (!rt.touch_active) return 0;
-        post(TIKU_EVENT_POINTER_UP, rt.touch_x, rt.touch_y, now);
-        rt.touch_active = 0;
+        /* A finger placed by the control file stays until "lift". */
+        if (!rt.touch_active || rt.touch_held) return 0;
+        release(now);
         return 1;
     }
     primary = 0;
@@ -452,24 +483,50 @@ static int touch(const surface_touch_report_t *r, uint64_t now)
     rt.input.id = r->points[primary].id;
     rt.input.x = r->points[primary].x;
     rt.input.y = r->points[primary].y;
+    rt.touch_held = 0;
     {
         int x, y;
 
         map_point(r->points[primary].x, r->points[primary].y, &x, &y);
-        if (!rt.touch_active) {
-            rt.touch_active = 1;
-            rt.touch_id = r->points[primary].id;
-            rt.touch_x = x;
-            rt.touch_y = y;
-            post(TIKU_EVENT_POINTER_DOWN, x, y, now);
-            return 1;
-        }
-        if (x == rt.touch_x && y == rt.touch_y) return 0;
+        return contact(x, y, r->points[primary].id, now);
+    }
+}
+
+/** @brief The primary contact at panel point (@p x, @p y) as pointer events. */
+static int contact(int x, int y, unsigned id, uint64_t now)
+{
+#if SURFACE_TOUCH_MODE
+    int px = rt.touch_x, py = rt.touch_y, event;
+
+    /* The mark follows the finger itself; the pointer follows the gesture,
+     * which holds a press still inside the slop. */
+    surface_presentation_mark(&rt.presentation, 1, x, y);
+    event = surface_gesture_contact(&rt.gesture, x, y, now, &px, &py);
+    if (!rt.touch_active) {
+        rt.touch_active = 1;
+        rt.touch_id = id;
+    }
+    rt.touch_x = px;
+    rt.touch_y = py;
+    if (event == SURFACE_GESTURE_NONE) return 0;
+    post(event == SURFACE_GESTURE_DOWN ? TIKU_EVENT_POINTER_DOWN : TIKU_EVENT_POINTER_MOVE,
+         px, py, now);
+    return 1;
+#else
+    if (!rt.touch_active) {
+        rt.touch_active = 1;
+        rt.touch_id = id;
         rt.touch_x = x;
         rt.touch_y = y;
-        post(TIKU_EVENT_POINTER_MOVE, x, y, now);
+        post(TIKU_EVENT_POINTER_DOWN, x, y, now);
         return 1;
     }
+    if (x == rt.touch_x && y == rt.touch_y) return 0;
+    rt.touch_x = x;
+    rt.touch_y = y;
+    post(TIKU_EVENT_POINTER_MOVE, x, y, now);
+    return 1;
+#endif
 }
 
 int surface_touch_map_valid(const surface_touch_map_t *m)
@@ -496,7 +553,19 @@ static tiku_present_result_t scan_poll(void *context, uint64_t ticket)
            result == SURFACE_SCANOUT_BUSY ? TIKU_PRESENT_BUSY : TIKU_PRESENT_ERROR;
 }
 
-static const surface_scanout_ops_t scanout = { scan_submit, scan_poll };
+#if SURFACE_TOUCH_MODE
+/** @brief Make the touch mark drawn into the buffer on show visible. */
+static int scan_amend(void *context, unsigned buffer, tiku_rect_t r)
+{
+    (void)context;
+    return surface_os_display_amend(buffer, (unsigned)r.x, (unsigned)r.y,
+                                    (unsigned)r.w, (unsigned)r.h);
+}
+
+static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, scan_amend };
+#else
+static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, NULL };
+#endif
 
 /** @brief The presentation lease ends: the frame is on the panel, or failed. */
 int tiku_framebuffer_complete(tiku_framebuffer_t *owner, uint64_t token,
@@ -731,9 +800,8 @@ int surface_runtime_poll(void)
         } else {
             rt.input.errors++;
         }
-        if (rt.touch_active && begin - rt.last_report >= TOUCH_EXPIRE_US) {
-            post(TIKU_EVENT_POINTER_UP, rt.touch_x, rt.touch_y, begin);
-            rt.touch_active = 0;
+        if (rt.touch_active && !rt.touch_held && begin - rt.last_report >= TOUCH_EXPIRE_US) {
+            release(begin);
             woke = 1;
         }
     }

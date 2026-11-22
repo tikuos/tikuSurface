@@ -92,8 +92,9 @@ void surface_runtime_stats(surface_runtime_stats_t *out);
 int surface_runtime_capture(void);
 /** @brief Queue a pointer event as touch would: @p kind is 'd' (down), 'm'
  *  (move), 'u' (up), 't' (down then up) or 'D' (two taps) at panel point
- *  @p x, @p y; zero
- *  when the runtime is stopped or the point is off the panel. */
+ *  @p x, @p y, or 'f' (a finger there, through the touch path) or 'l' (the
+ *  finger lifts); zero when the runtime is stopped or the point is off the
+ *  panel.  A finger placed with 'f' stays until 'l'. */
 int surface_runtime_inject(char kind, unsigned x, unsigned y);
 /** @brief Queue a drag as touch would: down at @p x0, @p y0, eight moves to
  *  @p x1, @p y1, then up; zero when a point is off the panel. */

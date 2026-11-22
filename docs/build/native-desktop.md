@@ -49,6 +49,16 @@ four levels deep, and 1 MiB each for window content caches and kept folder
 pixels. Settings files are polled for outside edits every 5 s.
 `SURFACE_HEAP_PROFILE=1` records the desktop's heap blocks by call site.
 
+## Touch
+
+With `SURFACE_TOUCH_MODE=1`, the default, a finger gets a mark under it as
+soon as the first report arrives: the runtime draws it into the buffer on show
+between submissions and writes those rows back to PSRAM, and each frame
+presented while the finger stays carries it. The pointer stays where the press
+landed until the finger travels 10 pixels, and a press within 24 pixels of a
+tap and 400 ms after it lands on that tap, so the desktop sees a double click
+(`desktop/gesture.h`). `SURFACE_TOUCH_MODE=0` posts the raw contacts.
+
 ## Diagnostics
 
 `/surface/control` accepts these commands from the owner context:
@@ -63,3 +73,4 @@ pixels. Settings files are polled for outside edits every 5 s.
 | `heap` | print the heap profile of a `SURFACE_HEAP_PROFILE=1` build |
 | `down=X,Y` `move=X,Y` `up=X,Y` `tap=X,Y` `dtap=X,Y` | queue pointer events as touch posts them |
 | `drag=X0,Y0,X1,Y1` | queue a press, eight moves along the line and a release |
+| `finger=X,Y` `lift` | place a finger at a panel point, or lift it, through the touch path: mark, slop and tap landing |

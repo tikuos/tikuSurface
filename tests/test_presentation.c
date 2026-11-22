@@ -36,7 +36,7 @@ static tiku_present_result_t submit(void *context, unsigned index, tiku_rect_t r
 /** @brief Return a controlled completion only for the submitted transport ticket. */
 static tiku_present_result_t poll(void *context, uint64_t token)
 { (void)context; assert(token == submitted); return completion_result; }
-static const surface_scanout_ops_t ops = {submit, poll};
+static const surface_scanout_ops_t ops = {submit, poll, NULL};
 
 /** @brief Fill a rectangle from an independent input/expected-output color pair. */
 static void color(tiku_rect_t r, uint32_t input, uint16_t output)
@@ -107,6 +107,107 @@ static void frames(void)
         completion_result = TIKU_PRESENT_BUSY;
     }
     assert(sequence == 6);
+    assert(tiku_framebuffer_destroy(&frame) && !host.memory.live);
+}
+
+static unsigned amends, amended_buffer;
+static tiku_rect_t amended;
+/** @brief Record which pixels of the buffer on show were changed in place. */
+static int amend(void *context, unsigned index, tiku_rect_t r)
+{ (void)context; ++amends; amended_buffer = index; amended = r; return 1; }
+static const surface_scanout_ops_t marking = {submit, poll, amend};
+
+/** @brief Whether two rectangles are the same. */
+static int same(tiku_rect_t a, tiku_rect_t b)
+{ return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h; }
+
+/** @brief Present damage @p r, with the source already holding its pixels, through its flip. */
+static void flip(surface_presentation_t *p, tiku_framebuffer_t *frame, tiku_presenter_t presenter,
+    tiku_rect_t r)
+{
+    assert(tiku_framebuffer_begin(frame, &r));
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_OK);
+    completion_result = TIKU_PRESENT_BUSY;
+    convert(p);
+    assert(surface_presentation_poll(p) == TIKU_PRESENT_BUSY);
+    completion_result = TIKU_PRESENT_OK;
+    assert(surface_presentation_poll(p) == TIKU_PRESENT_OK);
+}
+
+/** @brief A touch mark shows at once, rides every frame, follows a lift after a flip
+ *  and leaves both buffers as the source made them. */
+static void marks(void)
+{
+    surface_host_t host;
+    surface_config_t config = surface_host_config(&host);
+    tiku_framebuffer_t *frame = tiku_framebuffer_borrow(config.allocator, pixels, sizeof pixels, 800, 480);
+    surface_presentation_t p;
+    const uint16_t fill = 0x9578; /* half white, half 0x3333 */
+    sequence = 0; submits = 0; amends = 0; submission_result = TIKU_PRESENT_OK;
+    for (unsigned i = 0; i < 800 * 480; ++i) {
+        pixels[i] = 0x00ffffff; expected[i] = 0xffff; scanout[0][i] = scanout[1][i] = 0xdead;
+    }
+    assert(surface_presentation_init(&p, scanout[0], sizeof scanout[0], scanout[1], sizeof scanout[1],
+        0, 4096, &sequence, &marking, NULL));
+    tiku_presenter_t presenter = {surface_presentation_submit, &p};
+    flip(&p, frame, presenter, (tiku_rect_t){0, 0, 800, 480});
+    flip(&p, frame, presenter, (tiku_rect_t){0, 0, 1, 1});
+    assert(!memcmp(scanout[0], expected, sizeof expected) && !memcmp(scanout[1], expected, sizeof expected));
+    assert(!amends);
+
+    /* A contact marks the buffer on show at once, and only that buffer. */
+    unsigned shown = p.front;
+    surface_presentation_mark(&p, 1, 100, 100);
+    assert(amends == 1 && amended_buffer == shown && same(amended, (tiku_rect_t){84, 84, 32, 32}));
+    assert(scanout[shown][100 * 800 + 100] == fill && scanout[shown][100 * 800 + 86] == 0x2104 &&
+        scanout[shown][100 * 800 + 88] == 0xffff && scanout[shown][84 * 800 + 84] == 0xffff);
+    assert(scanout[shown ^ 1u][100 * 800 + 100] == 0xffff);
+    surface_presentation_mark(&p, 1, 100, 100);
+    assert(amends == 1);
+
+    /* A move puts back the old place and draws the new in one amend. */
+    surface_presentation_mark(&p, 1, 300, 200);
+    assert(amends == 2 && same(amended, (tiku_rect_t){84, 84, 232, 132}));
+    assert(scanout[shown][100 * 800 + 100] == 0xffff && scanout[shown][200 * 800 + 300] == fill);
+
+    /* A frame elsewhere goes out with the mark, and its region covers it. */
+    color((tiku_rect_t){600, 400, 10, 10}, 0x00ff0000, 0xf800);
+    flip(&p, frame, presenter, (tiku_rect_t){600, 400, 10, 10});
+    assert(p.front == (shown ^ 1u) && amends == 2);
+    assert(same(damage, (tiku_rect_t){0, 0, 610, 410}));
+    assert(scanout[p.front][200 * 800 + 300] == fill && scanout[p.front][405 * 800 + 605] == 0xf800);
+
+    /* A frame that changes the pixels under the mark: the mark is drawn over
+     * the new pixels, and they are what it leaves behind. */
+    color((tiku_rect_t){290, 190, 20, 20}, 0x000000ff, 0x001f);
+    flip(&p, frame, presenter, (tiku_rect_t){290, 190, 20, 20});
+    assert(scanout[p.front][200 * 800 + 300] == 0x1998); /* half 0x001f, half 0x3333 */
+
+    /* Lifted during a submission: the buffer on show keeps the mark until
+     * the flip, then the new one is cleared and amended. */
+    tiku_rect_t r = {10, 10, 2, 2};
+    assert(tiku_framebuffer_begin(frame, &r));
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_OK);
+    completion_result = TIKU_PRESENT_BUSY;
+    convert(&p);
+    unsigned before = amends, held = p.front;
+    surface_presentation_mark(&p, 0, 0, 0);
+    assert(amends == before && scanout[held][200 * 800 + 300] == 0x1998);
+    completion_result = TIKU_PRESENT_OK;
+    assert(surface_presentation_poll(&p) == TIKU_PRESENT_OK);
+    assert(amends == before + 1 && amended_buffer == p.front && same(amended, (tiku_rect_t){284, 184, 32, 32}));
+    assert(scanout[p.front][200 * 800 + 300] == 0x001f);
+
+    /* The buffer that last held it is converted without it: both end as the source. */
+    flip(&p, frame, presenter, (tiku_rect_t){0, 0, 1, 1});
+    flip(&p, frame, presenter, (tiku_rect_t){0, 0, 1, 1});
+    assert(!memcmp(scanout[0], expected, sizeof expected) && !memcmp(scanout[1], expected, sizeof expected));
+
+    /* Without an amend operation no mark is drawn. */
+    assert(surface_presentation_init(&p, scanout[0], sizeof scanout[0], scanout[1], sizeof scanout[1],
+        p.front, 4096, &sequence, &ops, NULL));
+    surface_presentation_mark(&p, 1, 100, 100);
+    assert(scanout[p.front][100 * 800 + 100] == 0xffff && !p.mark_on);
     assert(tiku_framebuffer_destroy(&frame) && !host.memory.live);
 }
 
@@ -190,7 +291,7 @@ static void layouts_and_retries(void)
 
 int main(void)
 {
-    frames(); refusals_and_errors(); layouts_and_retries();
-    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases and faults passed");
+    frames(); refusals_and_errors(); layouts_and_retries(); marks();
+    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases, faults and touch marks passed");
     return 0;
 }

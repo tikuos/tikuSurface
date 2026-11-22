@@ -268,12 +268,13 @@ LCD_TEST_RUNTIME := $(if $(filter 1,$(SURFACE_IMAGE)),tests/runtime_image.c,$(if
 
 $(BUILD)/test-runtime-lcd: platform/tikuos/media.c platform/tikuos/media.h tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/runtime.c platform/tikuos/runtime.h platform/tikuos/presentation.c platform/tikuos/presentation.h platform/tikuos/display.h $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
 	$(CC) $(FLAGS) -DSURFACE_LCD_ENABLE=1 -Iplatform/tikuos tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/presentation.c platform/tikuos/media.c $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
-test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
+test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
 	$(BUILD)/test-product-acceptance theme
 	$(BUILD)/test-product-acceptance reset
 	$(BUILD)/test-product-acceptance states
 	$(BUILD)/test-settings
 	$(BUILD)/test-touch
+	$(BUILD)/test-gesture
 	$(BUILD)/test-surface
 	$(BUILD)/test-runtime
 	$(BUILD)/test-presentation
@@ -288,6 +289,9 @@ capture: $(BUILD)/surface-preview
 
 $(BUILD)/test-touch: $(BUILD)/identity.h tests/test_touch.c shell/touch.c shell/touch.h shell/touch_report.h | $(BUILD)
 	$(CC) $(FLAGS) tests/test_touch.c shell/touch.c $(SDK_LIBRARIES) -o $@
+
+$(BUILD)/test-gesture: tests/test_gesture.c desktop/gesture.c desktop/gesture.h mk/host.mk | $(BUILD)
+	$(CC) -std=c11 -Wall -Wextra -Werror $(CFLAGS) -Idesktop tests/test_gesture.c desktop/gesture.c -o $@
 
 $(BUILD)/test-settings: tests/test_settings.c $(PRODUCT) $(HOST) $(HEADERS) shell/settings.h | $(BUILD)
 	$(CC) $(FLAGS) tests/test_settings.c $(PRODUCT) $(HOST) $(SDK_LIBRARIES) -o $@

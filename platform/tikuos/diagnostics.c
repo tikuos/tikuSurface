@@ -144,6 +144,9 @@ static int control_write(const char *text, size_t length)
         return surface_runtime_samples() ? TIKU_VFS_OK : TIKU_VFS_EIO;
     if (length == 4 && !memcmp(text, "heap", 4))
         return surface_runtime_heap_report() ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    /* finger=X,Y and lift: a finger placed and lifted through the touch path. */
+    if (length == 4 && !memcmp(text, "lift", 4))
+        return surface_runtime_inject('l', 0, 0) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
     /* down=X,Y move=X,Y up=X,Y tap=X,Y dtap=X,Y: pointer events as touch
      * posts them; dtap is two taps at once. */
     {
@@ -160,6 +163,8 @@ static int control_write(const char *text, size_t length)
                 return surface_runtime_inject(text[0], x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
             if (key == 4 && !memcmp(text, "dtap", 4))
                 return surface_runtime_inject('D', x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
+            if (key == 6 && !memcmp(text, "finger", 6))
+                return surface_runtime_inject('f', x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
         }
     }
     /* drag=X0,Y0,X1,Y1: down, eight moves along the line, up. */

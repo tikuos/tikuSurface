@@ -15,6 +15,14 @@ int surface_os_display_open(uint16_t *front, uint16_t *back);
 /** @brief Submit the named back buffer; refusal retains no new request. */
 int surface_os_display_submit(unsigned back, unsigned x, unsigned y,
     unsigned w, unsigned h, uint64_t token);
+/**
+ * @brief Write back a rectangle of the buffer on show after drawing into it.
+ * @return Nonzero once the rectangle's cache lines reached PSRAM; zero for the
+ *         back buffer, a rectangle off the screen or a failed write-back.
+ * @note Call only between a completed submission and the next one.
+ */
+int surface_os_display_amend(unsigned buffer, unsigned x, unsigned y,
+    unsigned w, unsigned h);
 /** @brief Poll a request; REFUSED preserves its ownership and requires recovery. */
 int surface_os_display_poll(uint64_t token);
 /** @brief Observe idle/conversion scanout events; zero requests recovery. */

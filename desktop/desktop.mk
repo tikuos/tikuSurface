@@ -50,9 +50,13 @@ DESKTOP_LIMITS := -DTIKU_TRK_POSES_MAX=256 -DTIKU_STATE_UPDATE_BYTES=262144 \
     -DTIKU_REMOTE_SESSIONS=1 -DTIKU_EVENTS_MAX=32 -DTIKU_SHELL_POLL_SCALE=10 \
     -DTIKU_TRK_NAV_DEPTH=4 -DTIKU_WINDOW_CACHE_BYTES=1048576 \
     -DTIKU_TRK_KEPT_PIXELS_BYTES=1048576
+# 1: a mark under the finger, a slop before the pointer moves and double taps
+# landing on the first tap (desktop/gesture.h); 0: raw touch contacts.
+SURFACE_TOUCH_MODE ?= 1
 DESKTOP_CFLAGS := $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOURCE \
     -ffunction-sections -fdata-sections -fstack-usage -Wall -Wno-unused-parameter \
     -DTIKU_SURFACE_TIKUOS=1 -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DTIKU_WORK_INLINE=1 \
+    -DSURFACE_TOUCH_MODE=$(SURFACE_TOUCH_MODE) \
     -DSURFACE_EPOCH=$(DESKTOP_EPOCH)LL -include $(DESKTOP_ROOT)/desktop/tikuos_libc.h \
     -include $(DESKTOP_GEN)/tiku_sdk_identity.h $(DESKTOP_LIMITS) $(DESKTOP_INCLUDES)
 

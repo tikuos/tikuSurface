@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "presentation.h"
+#include <string.h>
 
 #define RGB_BYTES (800u * 480u * sizeof(uint16_t))
 enum { IDLE, CONVERT, SUBMIT, WAIT };
@@ -20,6 +21,7 @@ static int disjoint(const void *a, size_t an, const void *b, size_t bn)
 static tiku_rect_t unite(tiku_rect_t a, tiku_rect_t b)
 {
     if (!a.w) return b;
+    if (!b.w) return a;
     int x = a.x < b.x ? a.x : b.x, y = a.y < b.y ? a.y : b.y;
     int right = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w;
     int bottom = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
@@ -61,6 +63,79 @@ static void add_part(tiku_rect_t *parts, tiku_rect_t r)
     }
     for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i)
         parts[i] = i < n ? all[i] : (tiku_rect_t){0};
+}
+
+/* The touch mark: a disc of radius MARK_R, a one-pixel dark edge, a white
+ * ring two pixels wide and a half-tone selection blue inside, so it reads on
+ * the white lists and on the blue desk alike. */
+#define MARK_R 14
+#define MARK_EDGE 0x2104u
+#define MARK_RING 0xffffu
+#define MARK_FILL 0x3333u
+
+/** @brief The part of the screen a mark centred on (@p x, @p y) covers. */
+static tiku_rect_t mark_rect(int x, int y)
+{
+    int x0 = x - SURFACE_MARK_SIZE / 2, y0 = y - SURFACE_MARK_SIZE / 2;
+    int x1 = x0 + SURFACE_MARK_SIZE, y1 = y0 + SURFACE_MARK_SIZE;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > 800) x1 = 800;
+    if (y1 > 480) y1 = 480;
+    return x1 > x0 && y1 > y0 ? (tiku_rect_t){x0, y0, x1 - x0, y1 - y0} : (tiku_rect_t){0};
+}
+
+/** @brief Put back the pixels buffer @p b's mark covers. */
+static void unmark(surface_presentation_t *p, unsigned b)
+{
+    tiku_rect_t r = p->marked[b];
+    for (int row = 0; row < r.h; ++row)
+        memcpy(p->buffers[b] + (r.y + row) * 800 + r.x, p->under[b] + row * r.w,
+            (size_t)r.w * sizeof(uint16_t));
+    p->marked[b] = (tiku_rect_t){0};
+}
+
+/** @brief Draw the wanted mark into buffer @p b, keeping the pixels it covers. */
+static void mark(surface_presentation_t *p, unsigned b)
+{
+    unmark(p, b);
+    p->drawn[b] = p->mark_seq;
+    if (!p->mark_on) return;
+    tiku_rect_t r = mark_rect(p->mark_x, p->mark_y);
+    for (int row = 0; row < r.h; ++row) {
+        uint16_t *line = p->buffers[b] + (r.y + row) * 800 + r.x;
+        int dy = r.y + row - p->mark_y;
+        memcpy(p->under[b] + row * r.w, line, (size_t)r.w * sizeof(uint16_t));
+        for (int i = 0; i < r.w; ++i) {
+            int dx = r.x + i - p->mark_x, d = dx * dx + dy * dy;
+            if (d > MARK_R * MARK_R) continue;
+            if (d > (MARK_R - 1) * (MARK_R - 1)) line[i] = MARK_EDGE;
+            else if (d > (MARK_R - 3) * (MARK_R - 3)) line[i] = MARK_RING;
+            else line[i] = (uint16_t)(((line[i] & 0xf7deu) >> 1) + ((MARK_FILL & 0xf7deu) >> 1));
+        }
+    }
+    p->marked[b] = r;
+}
+
+/** @brief Bring the buffer on show to the wanted mark and make the change visible. */
+static void mark_front(surface_presentation_t *p)
+{
+    unsigned f = p->front;
+    if (p->drawn[f] == p->mark_seq) return;
+    tiku_rect_t was = p->marked[f];
+    mark(p, f);
+    tiku_rect_t changed = unite(was, p->marked[f]);
+    if (changed.w) (void)p->ops->amend(p->context, f, changed);
+}
+
+void surface_presentation_mark(surface_presentation_t *p, int on, int x, int y)
+{
+    if (!p || !p->ops || !p->ops->amend || p->failed) return;
+    on = on != 0;
+    if (on == p->mark_on && (!on || (x == p->mark_x && y == p->mark_y))) return;
+    p->mark_on = on; p->mark_x = x; p->mark_y = y; ++p->mark_seq;
+    /* A submission keeps both buffers as they are until it completes. */
+    if (p->phase == IDLE || p->phase == CONVERT) mark_front(p);
 }
 
 /** @brief Step past converted parts of @p back; zero once none remains. */
@@ -113,6 +188,8 @@ tiku_present_result_t surface_presentation_submit(void *context, const tiku_pres
         if (parts[i].w) { p->region = unite(p->region, parts[i]); p->convert_px += area(parts[i]); }
     p->part = 0;
     p->x = (unsigned)parts[0].x; p->y = (unsigned)parts[0].y;
+    /* The back buffer is converted without the mark it held when shown. */
+    unmark(p, p->front ^ 1u);
     p->phase = CONVERT;
     return TIKU_PRESENT_OK;
 }
@@ -155,7 +232,14 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
             remaining -= count;
             if (p->x == right) { p->x = (unsigned)r.x; ++p->y; }
         }
-        if (!next_part(p, back)) p->phase = SUBMIT;
+        if (!next_part(p, back)) {
+            /* The frame goes out with the mark, so a flip never hides it. */
+            if (p->ops->amend) {
+                mark(p, back);
+                p->region = unite(p->region, p->marked[back]);
+            }
+            p->phase = SUBMIT;
+        }
         return TIKU_PRESENT_BUSY;
     }
     if (p->phase == SUBMIT) {
@@ -174,7 +258,10 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
         for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i) p->pending[back][i] = (tiku_rect_t){0};
     }
     if (result != TIKU_PRESENT_OK && result != TIKU_PRESENT_ERROR) return TIKU_PRESENT_BUSY;
-    return complete(p, result);
+    tiku_present_result_t done = complete(p, result);
+    /* A mark moved or lifted during the submission follows now. */
+    if (result == TIKU_PRESENT_OK && !p->failed && p->ops->amend) mark_front(p);
+    return done;
 }
 
 int surface_presentation_closed(surface_presentation_t *p)

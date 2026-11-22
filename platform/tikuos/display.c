@@ -7,6 +7,7 @@
 #include "runtime.h"
 #include <interfaces/display/tiku_display.h>
 #include <arch/esp32s31/tiku_display_arch.h>
+#include <arch/esp32s31/tiku_psram_arch.h>
 
 static tiku_display_t display;
 static uint16_t *buffers[2];
@@ -32,6 +33,24 @@ int surface_os_display_submit(unsigned back, unsigned x, unsigned y,
     int result = tiku_display_submit(&display, token, (uint16_t)x, (uint16_t)y,
         (uint16_t)w, (uint16_t)h);
     return result == TIKU_DISPLAY_PENDING ? SURFACE_SCANOUT_OK : SURFACE_SCANOUT_ERROR;
+}
+
+int surface_os_display_amend(unsigned buffer, unsigned x, unsigned y,
+    unsigned w, unsigned h)
+{
+    if (!surface_os_in_owner() || !opened || buffer > 1 || display.front != buffers[buffer] ||
+        x >= 800 || y >= 480 || !w || !h || w > 800 - x || h > 480 - y)
+        return 0;
+    /* Each row's cache lines go to PSRAM; scanout only reads this buffer,
+     * so a row shows the old pixels or the new until its next scan. */
+    for (unsigned row = y; row < y + h; ++row) {
+        uintptr_t begin = (uintptr_t)(buffers[buffer] + row * 800u + x);
+        uintptr_t end = begin + w * sizeof(uint16_t);
+        begin &= ~(uintptr_t)(TIKU_S31_PSRAM_LINE - 1u);
+        end = (end + TIKU_S31_PSRAM_LINE - 1u) & ~(uintptr_t)(TIKU_S31_PSRAM_LINE - 1u);
+        if (tiku_s31_psram_sync((void *)begin, (uint32_t)(end - begin), 0)) return 0;
+    }
+    return 1;
 }
 
 int surface_os_display_poll(uint64_t token)
