@@ -61,8 +61,9 @@
 #define TIKU_SHELL_RESTART_MESSAGE "TikuSurface stopped and was started again.  "
 /** @brief User icon-directory path format. */
 #define TIKU_SHELL_USER_ICONS_PATH "%s/.config/tracker/icons"
-/** @brief Mount diagnostic line format for the selected services. */
-#define TIKU_SHELL_MOUNT_REPORT_FORMAT "  %s%s%s\n"
+/** @brief Report line format for a mount or a hosted application: with
+ *  board services off the shell passes one string, its prefix or name. */
+#define TIKU_SHELL_MOUNT_REPORT_FORMAT "  %s\n"
 /** @brief Settings notice for changes applied at the next desktop start. */
 #define TIKU_SHELL_RESTART_SETTINGS_MESSAGE "Changes take effect the next time you start TikuSurface."
 /** @brief Background-image configuration suffix relative to the home directory. */
