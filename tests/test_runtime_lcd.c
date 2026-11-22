@@ -156,8 +156,14 @@ int surface_os_display_close(void)
 int surface_os_input_open(unsigned *owned) { if (input_failure) return 0; assert(!touch_bus_open); *owned = touch_bus_open = 1; return 1; }
 /** @brief Release the fixture bus. */
 void surface_os_input_close(unsigned *owned) { assert(touch_bus_open && *owned); *owned = touch_bus_open = 0; }
-/** @brief Report complete contact release. */
-int surface_os_input_poll(surface_touch_report_t *out) { *out = touch_report; return !out->cancel; }
+static int touch_none;
+/** @brief Hand over the fixture's report, or none while touch_none is set. */
+int surface_os_input_poll(surface_touch_report_t *out)
+{
+    if (touch_none) { memset(out, 0, sizeof *out); return SURFACE_OS_INPUT_NONE; }
+    *out = touch_report;
+    return out->cancel ? SURFACE_OS_INPUT_FAILED : SURFACE_OS_INPUT_REPORT;
+}
 
 static unsigned media_oversize;
 /** @brief Require the complete bridge reservation and permit one-byte overrun injection. */
@@ -309,8 +315,16 @@ static void touch_lifecycle(void)
     now += 10000; assert(surface_runtime_poll());
     surface_input_stats_t input;
     assert(surface_runtime_input_stats(&input) && input.reports == 1 && input.contacts == 1 && input.x == 80 && input.y == 200 && input.id == 4);
+    /* Polls between two of the controller's reports find none: the finger
+     * stays down, and the tap ends at the report with no contacts. */
+    surface_runtime_stats_t result;
+    touch_none = 1;
+    for (unsigned i = 0; i < 3; i++) { now += 10000; assert(surface_runtime_poll()); }
+    surface_runtime_stats(&result); assert(result.foreground == 0);
+    assert(surface_runtime_input_stats(&input) && input.contacts == 1);
+    touch_none = 0;
     touch_report.count = 0; now += 10000; assert(surface_runtime_poll());
-    surface_runtime_stats_t result; surface_runtime_stats(&result); assert(result.foreground == 1);
+    surface_runtime_stats(&result); assert(result.foreground == 1);
     surface_runtime_stop(); while (surface_runtime_poll()) {}
     assert(!touch_bus_open);
 }

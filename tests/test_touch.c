@@ -57,6 +57,18 @@ int main(void)
     surface_touch_report(&t,s,&r,1); assert(t.blocked && !t.active);
     refuse = 0; assert(surface_touch_init(&t,&map)); r.cancel = 1;
     surface_touch_report(&t,s,&r,1); assert(t.blocked && !t.active);
+    /* A cancellation with no finger on the panel gets no empty report: the
+     * controller is silent.  100 ms of that rearms, and reports from a finger
+     * that stays down do not. */
+    assert(surface_touch_init(&t,&map)); r.cancel = 0; r.count = 1;
+    surface_touch_report(&t,s,&r,200000); assert(t.active);
+    surface_touch_cancel(&t,s); assert(t.blocked && !t.active);
+    surface_touch_report(&t,s,&r,250000);
+    surface_touch_expire(&t,s,340000); assert(t.blocked);
+    surface_touch_expire(&t,s,350000); assert(!t.blocked && !t.active);
+    unsigned before = count;
+    surface_touch_report(&t,s,&r,360000);
+    assert(count == before + 1 && events[before].type == TIKU_EVENT_POINTER_DOWN && t.active);
     puts("touch: mapping, identity, cancellation and expiry pass");
     return 0;
 }

@@ -523,14 +523,18 @@ int surface_runtime_poll(void)
             surface_touch_report_t report;
             int valid = surface_os_input_poll(&report);
             ++state->input_stats.reports;
-            state->input_stats.errors += !valid || report.cancel;
-            state->input_stats.contacts = valid && !report.cancel ? report.count : 0;
-            if (valid && !report.cancel && report.count && report.count <= SURFACE_TOUCH_CONTACTS) {
-                state->input_stats.id = report.points[0].id;
-                state->input_stats.x = report.points[0].x;
-                state->input_stats.y = report.points[0].y;
+            /* A poll with no report leaves the contact where the last report
+             * put it; surface_touch_expire() ends one that gets none. */
+            if (valid != SURFACE_OS_INPUT_NONE) {
+                state->input_stats.errors += !valid || report.cancel;
+                state->input_stats.contacts = valid && !report.cancel ? report.count : 0;
+                if (valid && !report.cancel && report.count && report.count <= SURFACE_TOUCH_CONTACTS) {
+                    state->input_stats.id = report.points[0].id;
+                    state->input_stats.x = report.points[0].x;
+                    state->input_stats.y = report.points[0].y;
+                }
+                surface_touch_report(&state->touch, state->shell, &report, started);
             }
-            surface_touch_report(&state->touch, state->shell, &report, started);
             state->next_touch = started > UINT64_MAX - 10000 ? UINT64_MAX : started + 10000;
         }
     }

@@ -27,9 +27,10 @@ int tiku_i2c_write_read(uint8_t addr, const uint8_t *tx, uint16_t n, uint8_t *rx
     if (tx[1] == 0x40) { ++probes; if (fail == 2) return -1; memcpy(rx,"1158",4); return 0; }
     assert(tx[1] == 0x4e);
     if (fail == 3) return -1;
-    if (length == 1) { rx[0] = 1; return 0; }
+    if (fail == 6) return 0;
+    if (length == 1) { rx[0] = 0x81; return 0; }
     assert(length == 11);
-    const uint8_t wire[] = {1, 3, 0x34, 0x12, 0x78, 0x56, 0, 0, 0, 0, 0xe8};
+    const uint8_t wire[] = {0x81, 3, 0x34, 0x12, 0x78, 0x56, 0, 0, 0, 0, 0x68};
     memcpy(rx,wire,sizeof wire);
     if (fail == 5) rx[10] ^= 1;
     return 0;
@@ -47,6 +48,9 @@ int main(void)
     assert(surface_os_input_poll(&report) && report.count == 1 && !report.cancel);
     assert(report.points[0].x == 0x1234 && report.points[0].y == 0x5678 && report.points[0].id == 3);
     for (fail = 3; fail <= 5; ++fail) assert(!surface_os_input_poll(&report) && report.cancel && !report.count);
+    /* The register as an acknowledgement leaves it: no report, no cancellation. */
+    fail = 6; assert(surface_os_input_poll(&report) == SURFACE_OS_INPUT_NONE && !report.cancel && !report.count);
+    fail = 0; assert(surface_os_input_poll(&report) == SURFACE_OS_INPUT_REPORT && report.count == 1);
     surface_os_input_close(&owned); assert(!owned && !opened);
     fail = 0; opened = 1; int before = closes;
     assert(surface_os_input_open(&owned) && !owned);

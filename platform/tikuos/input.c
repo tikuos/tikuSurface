@@ -27,19 +27,20 @@ int surface_os_input_poll(surface_touch_report_t *out)
     if (!out) return 0;
     memset(out, 0, sizeof *out);
     tiku_touch_report_t report;
-    if (!surface_os_in_owner() || tiku_i2c_budget_begin(3500)) { out->cancel = 1; return 0; }
+    if (!surface_os_in_owner() || tiku_i2c_budget_begin(3500)) { out->cancel = 1; return SURFACE_OS_INPUT_FAILED; }
     int result = tiku_touch_poll(&report);
     tiku_i2c_budget_end();
-    if (result) { out->cancel = 1; return 0; }
+    if (result) { out->cancel = 1; return SURFACE_OS_INPUT_FAILED; }
+    if (!report.fresh && !report.cancel) return SURFACE_OS_INPUT_NONE;
     out->cancel = report.cancel;
     out->count = report.count;
-    if (out->count > SURFACE_TOUCH_CONTACTS) { out->cancel = 1; return 0; }
+    if (out->count > SURFACE_TOUCH_CONTACTS) { out->cancel = 1; return SURFACE_OS_INPUT_FAILED; }
     for (unsigned i = 0; i < out->count; ++i) {
         out->points[i].x = report.contacts[i].x;
         out->points[i].y = report.contacts[i].y;
         out->points[i].id = report.contacts[i].id;
     }
-    return 1;
+    return SURFACE_OS_INPUT_REPORT;
 }
 
 void surface_os_input_close(unsigned *owned)

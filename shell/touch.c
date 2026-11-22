@@ -88,6 +88,7 @@ void surface_touch_report(surface_touch_t *t, surface_t *s, const surface_touch_
 
 void surface_touch_expire(surface_touch_t *t, surface_t *s, uint64_t now)
 {
-    if (t && t->active && (now < t->last_report || now - t->last_report >= 100000))
-        surface_touch_cancel(t, s);
+    if (!t || (now >= t->last_report && now - t->last_report < 100000)) return;
+    if (t->active) surface_touch_cancel(t, s);
+    else t->blocked = 0;
 }

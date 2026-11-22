@@ -795,10 +795,12 @@ int surface_runtime_poll(void)
     if (rt.input_open) {
         surface_touch_report_t report;
 
-        if (surface_os_input_poll(&report)) {
-            woke |= touch(&report, begin);
-        } else {
-            rt.input.errors++;
+        /* A poll with no report leaves the finger where the last report
+         * put it; TOUCH_EXPIRE_US without one releases it. */
+        switch (surface_os_input_poll(&report)) {
+        case SURFACE_OS_INPUT_REPORT: woke |= touch(&report, begin); break;
+        case SURFACE_OS_INPUT_NONE: break;
+        default: rt.input.errors++; break;
         }
         if (rt.touch_active && !rt.touch_held && begin - rt.last_report >= TOUCH_EXPIRE_US) {
             release(begin);

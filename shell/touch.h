@@ -7,7 +7,8 @@
 #define SURFACE_TOUCH_H
 #include "surface.h"
 #include "touch_report.h"
-/** @brief Caller-owned tracking state; cancellation requires an empty report to rearm. */
+/** @brief Caller-owned tracking state; after a cancellation an empty report rearms it, or
+ *  100 ms without a report. */
 typedef struct {
     surface_touch_map_t map;
     uint64_t last_report;
@@ -22,6 +23,7 @@ int surface_touch_init(surface_touch_t *, const surface_touch_map_t *);
 void surface_touch_cancel(surface_touch_t *, surface_t *);
 /** @brief Deliver one complete report; malformed coordinates/IDs cancel the gesture. */
 void surface_touch_report(surface_touch_t *, surface_t *, const surface_touch_report_t *, uint64_t);
-/** @brief Cancel an active contact after 100 ms without a report or clock rollback. */
+/** @brief After 100 ms without a report, or a clock rollback, cancel an active contact;
+ *  with none active, rearm after a cancellation. */
 void surface_touch_expire(surface_touch_t *, surface_t *, uint64_t);
 #endif
