@@ -44,13 +44,6 @@
 #define _open px_open
 #define opendir pxopendir
 #define pread pxpread
-#define pthread_equal pxpthread_equal
-#define pthread_mutex_destroy pxpthread_mutex_destroy
-#define pthread_mutex_init pxpthread_mutex_init
-#define pthread_mutex_lock pxpthread_mutex_lock
-#define pthread_mutex_trylock pxpthread_mutex_trylock
-#define pthread_mutex_unlock pxpthread_mutex_unlock
-#define pthread_self pxpthread_self
 #define pwrite pxpwrite
 #define _read px_read
 #define readdir pxreaddir

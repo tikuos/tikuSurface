@@ -1636,15 +1636,6 @@ void _exit(int code)
     }
 }
 
-/* One thread runs the desktop, so a mutex is never contended. */
-int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a) { (void)m; (void)a; return 0; }
-int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
-int pthread_mutex_lock(pthread_mutex_t *m) { (void)m; return 0; }
-int pthread_mutex_trylock(pthread_mutex_t *m) { (void)m; return 0; }
-int pthread_mutex_unlock(pthread_mutex_t *m) { (void)m; return 0; }
-pthread_t pthread_self(void) { return (pthread_t)1; }
-int pthread_equal(pthread_t a, pthread_t b) { return a == b; }
-
 /*---------------------------------------------------------------------------*/
 /* SELF-TEST                                                                 */
 /*---------------------------------------------------------------------------*/
