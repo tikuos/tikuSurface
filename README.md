@@ -48,7 +48,10 @@ Escape performs Back. The browser shows fixture folders/files with delayed
 completion; it does not read the host filesystem. Device information identifies
 the available host capabilities and selected build revision. The
 [appearance contract](docs/contracts/appearance.md) specifies shared BeOS
-components, artwork sources and touch adaptations. [Runtime ownership](docs/contracts/runtime.md)
+components, artwork sources and touch adaptations.
+[Kernel use](docs/contracts/kernel-use.md) lists the operating-system
+facilities the native desktop takes from TikuOS and those it still carries.
+[Runtime ownership](docs/contracts/runtime.md)
 describes cancellation and application retirement. The [S31 operating guide](docs/operation/README.md)
 covers panel navigation, calibration, observation and recovery. The
 [first-use workflow](docs/operation/first-use.md) includes explicit media setup

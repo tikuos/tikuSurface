@@ -4,6 +4,15 @@ TikuSurface owns its shell, static application inventory and host/TikuOS
 adapters. Shared models, controls and rendering belong in Stomme. Firmware
 register access and service operations belong in TikuOS or its driver repository.
 
+On TikuOS, use what the kernel provides. A need the kernel answers is answered
+by the kernel through `platform/tikuos/`; the product does not keep a second
+implementation. A need the kernel does not answer is raised and closed in
+TikuOS, with its tests, before the product relies on it. The product keeps what
+no kernel has: panel presentation, gestures and the POSIX adapter, which adapts
+and does not store. [Kernel use](docs/contracts/kernel-use.md) lists what the
+native desktop takes from the kernel and what it still carries, with the
+reason; change it with the code.
+
 The `foundation/` submodule and `foundation.lock.json` select Stomme. Update
 the gitlink, revision and content hash together. Runtime consumers use exported
 SDK headers and archives. Foundation examples and private headers are not
