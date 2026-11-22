@@ -902,6 +902,49 @@ int _stat(const char *path, struct stat *st)
 int lstat(const char *path, struct stat *st) { return _stat(path, st); }
 int _isatty(int fd) { return fd >= 0 && fd < FIRST_FD; }
 
+/**
+ * @brief The descriptor's flags, for newlib's fdopen(), which refuses a
+ *        descriptor whose access mode it cannot read, and for callers that
+ *        set close-on-exec.
+ * @return F_GETFL: the access mode the descriptor was opened with, with its
+ *         O_APPEND and O_NONBLOCK; read and write for the three standard
+ *         streams.  F_SETFL: 0, with O_APPEND and O_NONBLOCK taken from the
+ *         argument.  F_GETFD and F_SETFD: 0; there is no exec to close a
+ *         descriptor on.  Any other command: -1 with EINVAL.
+ */
+int _fcntl(int fd, int cmd, ...)
+{
+    fd_t *f = fd_of(fd);
+    va_list ap;
+    int arg;
+
+    if (f == NULL && !(fd >= 0 && fd < FIRST_FD)) {
+        errno = EBADF;
+        return -1;
+    }
+    va_start(ap, cmd);
+    arg = va_arg(ap, int);
+    va_end(ap);
+    switch (cmd) {
+    case F_GETFL:
+        return (f != NULL) ? f->flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) : O_RDWR;
+    case F_SETFL:
+        if (f != NULL) {
+            f->flags = (f->flags & ~(O_APPEND | O_NONBLOCK)) | (arg & (O_APPEND | O_NONBLOCK));
+        }
+        return 0;
+    case F_GETFD:
+    case F_SETFD:
+        return 0;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+}
+
+/** @brief The one process there is; newlib's tmpnam() puts it in a name. */
+int _getpid(void) { return 1; }
+
 ssize_t pread(int fd, void *buf, size_t n, off_t offset)
 {
     fd_t *f = fd_of(fd);
@@ -1523,6 +1566,31 @@ void surface_desktop_selftest(void)
 
         ok = fd >= 0 && write(fd, "x", 1) == 1 && close(fd) == 0 && unlink(tmpl) == 0;
         fprintf(stderr, "posix: mkstemp=%d errno=%d\n", ok, ok ? 0 : errno);
+    }
+    {
+        /* A stream on a descriptor, as an atomic file replacement writes. */
+        char tmpl[] = "/tmp/stream-XXXXXX";
+        int fd = mkstemp(tmpl), failed;
+        FILE *s = (fd >= 0) ? fdopen(fd, "wb") : NULL;
+
+        ok = s != NULL && fputs("y", s) >= 0 && fclose(s) == 0 && stat(tmpl, &st) == 0 &&
+             st.st_size == 1;
+        failed = errno;
+        if (s == NULL && fd >= 0) close(fd);
+        unlink(tmpl);
+        fprintf(stderr, "posix: fdopen=%d errno=%d\n", ok, ok ? 0 : failed);
+    }
+    {
+        /* A nameless file, as the settings reader and writer use. */
+        FILE *t = tmpfile();
+        char got[4] = "";
+        int failed;
+
+        ok = t != NULL && fputs("tmp", t) >= 0 && fseek(t, 0, SEEK_SET) == 0 &&
+             fread(got, 1, 3u, t) == 3u && memcmp(got, "tmp", 3u) == 0;
+        failed = errno;
+        if (t != NULL) fclose(t);
+        fprintf(stderr, "posix: tmpfile=%d errno=%d\n", ok, ok ? 0 : failed);
     }
     ok = access("/home/Documents/Welcome.txt", R_OK | W_OK) == 0 &&
          access("/home/Documents/Welcome.txt", X_OK) != 0 && errno == EACCES &&
