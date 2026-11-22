@@ -21,6 +21,7 @@ int _open(const char *path, int flags, int mode);
 int _close(int fd);
 int _unlink(const char *path);
 int _rename(const char *old, const char *new);
+int _stat(const char *path, struct stat *st);
 int surface_desktop_files(void);
 
 /* The desktop side the layer calls: no card, no log, a fixed clock. */
@@ -59,6 +60,16 @@ int main(void)
     DIR *d;
 
     assert(surface_desktop_files() == 0);
+
+    /* Desktop and Documents say the home is not kept, read-only. */
+    {
+        struct stat st;
+
+        assert(_stat("/home/Desktop/Files here are lost at restart.txt", &st) == 0);
+        assert(S_ISREG(st.st_mode) && (st.st_mode & 0222) == 0 && st.st_size > 0);
+        assert(_stat("/home/Documents/Files here are lost at restart.txt", &st) == 0);
+        assert((st.st_mode & 0222) == 0);
+    }
 
     /* A directory removed while a stream holds it: the stream gives the
      * dots and its end, and the last close frees it (#7). */
@@ -106,6 +117,7 @@ int main(void)
     assert(!strcmp(next(d), ""));
     assert(closedir(d) == 0);
 
-    puts("posix layer: directory streams outlive the entries they reach");
+    puts("posix layer: the home's note is seeded; directory streams outlive the "
+         "entries they reach");
     return 0;
 }

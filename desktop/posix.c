@@ -33,6 +33,10 @@
 #define SURFACE_EPOCH 1795000000LL
 #endif
 #define NAME_MAX_BYTES 128
+/* A read-only file in Desktop and Documents that says the home is not kept. */
+#define SURFACE_HOME_NOTE "Files here are lost at restart.txt"
+#define SURFACE_HOME_NOTE_TEXT "Desktop and Documents are held in memory on this board.\n" \
+    "Files saved here are lost when the board restarts.\n"
 #define FDS 48
 #define FIRST_FD 3
 
@@ -548,7 +552,12 @@ static int make_dirs(const char *path)
 }
 
 /** @brief Create @p path with @p text, making its directories. */
-static void seed(const char *path, const char *text)
+int _open(const char *path, int flags, int mode);
+_ssize_t _write(int fd, const void *buf, size_t n);
+int _close(int fd);
+
+/** @brief Create @p path with @p text and @p mode, making its directories. */
+static void seed(const char *path, const char *text, mode_t mode)
 {
     char dir[PATH_MAX];
     char *slash;
@@ -560,10 +569,11 @@ static void seed(const char *path, const char *text)
         *slash = '\0';
         (void)make_dirs(dir);
     }
-    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* The layer's own calls: the C library's open() reaches them too. */
+    fd = _open(path, O_WRONLY | O_CREAT | O_TRUNC, (int)mode);
     if (fd >= 0) {
-        (void)write(fd, text, strlen(text));
-        (void)close(fd);
+        (void)_write(fd, text, strlen(text));
+        (void)_close(fd);
     }
 }
 
@@ -642,15 +652,18 @@ int surface_desktop_files(void)
         rnode_t *card = node_new(root, "Card", S_IFDIR | 0555);
 
         if (card == NULL || card_mark(card, "", 0) != 0) return -1;
-        seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\ncard /Card mfs ro 0 0\n");
+        seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\ncard /Card mfs ro 0 0\n", 0644);
     } else {
-        seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\n");
+        seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\n", 0644);
     }
-    seed("/proc/partitions", "major minor  #blocks  name\n");
+    seed("/proc/partitions", "major minor  #blocks  name\n", 0644);
     /* Thumbnails are deferred on the panel: no image codecs measured yet. */
-    seed("/home/.config/TrackerSettings", "GenerateImageThumbnails off\n");
+    seed("/home/.config/TrackerSettings", "GenerateImageThumbnails off\n", 0644);
     seed("/home/Documents/Welcome.txt",
-         "TikuSurface runs TikuDesktop's shell on TikuOS.\n");
+         "TikuSurface runs TikuDesktop's shell on TikuOS.\n", 0644);
+    /* The home is this tree: say so where files are saved. */
+    seed("/home/Desktop/" SURFACE_HOME_NOTE, SURFACE_HOME_NOTE_TEXT, 0444);
+    seed("/home/Documents/" SURFACE_HOME_NOTE, SURFACE_HOME_NOTE_TEXT, 0444);
     return 0;
 }
 

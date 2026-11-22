@@ -41,7 +41,8 @@ in a 640 KiB section at the top of PSRAM; the firmware's PSRAM tier ends below i
 
 The desktop's files live in a tree in its heap: `/home` with `Desktop`,
 `Documents` and `.config/tracker`, its settings and the `/proc` files the
-volume kit reads. The tree is built again at each start. `/Card` shows the SD
+volume kit reads. The tree is built again at each start, and a read-only
+`Files here are lost at restart.txt` in `Desktop` and `Documents` says so. `/Card` shows the SD
 card's media volume read-only through the queued media bridge; a write there
 returns `EROFS`. `/dev/urandom` and `/dev/random` return SHA-256 counter-mode
 output from a key seeded once at start. Tracker starts with image thumbnails off.
