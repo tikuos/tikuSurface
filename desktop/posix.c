@@ -29,9 +29,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifndef SURFACE_EPOCH
-#define SURFACE_EPOCH 1795000000LL
-#endif
 #define NAME_MAX_BYTES 128
 /* A read-only file in Desktop and Documents that says the home is not kept. */
 #define SURFACE_HOME_NOTE "Files here are lost at restart.txt"
@@ -157,10 +154,16 @@ typedef struct {
 } fd_t;
 static fd_t fds[FDS];
 
-/** @brief Seconds of wall time: the build's epoch plus the time since boot. */
+/** @brief Seconds of wall time for a file's times, from the kernel's clock
+ *  through compat/posix; 0, which Tracker shows as no date, while the clock
+ *  has never been set. */
 static time_t wall(void)
 {
-    return (time_t)(SURFACE_EPOCH + (long long)(surface_desktop_now_us() / 1000000u));
+    struct timespec now;
+
+    if (surface_os_clock_state() == SURFACE_CLOCK_UNSET ||
+        clock_gettime(CLOCK_REALTIME, &now) != 0) return 0;
+    return now.tv_sec;
 }
 
 static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
@@ -1480,35 +1483,6 @@ int closedir(DIR *dp)
 /*---------------------------------------------------------------------------*/
 /* TIME, PROCESSES AND THREADS                                               */
 /*---------------------------------------------------------------------------*/
-
-int clock_gettime(clockid_t clock, struct timespec *now)
-{
-    uint64_t us = surface_desktop_now_us();
-
-    if (now == NULL) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (clock == CLOCK_REALTIME) {
-        now->tv_sec = (time_t)(SURFACE_EPOCH + (long long)(us / 1000000u));
-    } else {
-        now->tv_sec = (time_t)(us / 1000000u);
-    }
-    now->tv_nsec = (long)(us % 1000000u) * 1000L;
-    return 0;
-}
-
-int _gettimeofday(struct timeval *tv, void *tz)
-{
-    struct timespec ts;
-
-    (void)tz;
-    if (tv == NULL) return 0;
-    (void)clock_gettime(CLOCK_REALTIME, &ts);
-    tv->tv_sec = ts.tv_sec;
-    tv->tv_usec = ts.tv_nsec / 1000L;
-    return 0;
-}
 
 static int never(void *context) { (void)context; return 0; }
 

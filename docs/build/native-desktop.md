@@ -37,6 +37,16 @@ reports into pointer events, presents a frame the desktop handed over and
 advances the desktop's card request. The shell's zero-initialized statics sit
 in a 640 KiB section at the top of PSRAM; the firmware's PSRAM tier ends below it.
 
+## Clock
+
+The desktop's clock calls, `clock_gettime`, `gettimeofday` and `time`, come
+from TikuOS's `compat/posix` library, which `desktop/firmware.mk` selects
+with `TIKU_POSIX_ENABLE := 1`; real time is the kernel's wall clock. Until
+the clock is set, by `write /sys/time` or the network time command, the
+Deskbar shows dashes for the time and files made then have no date. After
+a restart the clock goes on from the time last set: the Deskbar shows that
+time dimmed, with a question mark, until the clock is set again.
+
 ## Files
 
 The desktop's files live in a tree in its heap: `/home` with `Desktop`,

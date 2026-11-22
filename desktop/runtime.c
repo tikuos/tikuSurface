@@ -22,6 +22,7 @@
 #include "../platform/tikuos/input.h"
 #include "../platform/tikuos/settings_io.h"
 #include "gesture.h"
+#include "tiku_trk_deskbar.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -293,6 +294,20 @@ static int map_request(int kind, const int *edge)
     surface_os_desktop_kick();
     while (!map_finished(NULL)) surface_os_desktop_wait(map_finished, NULL, 1000000u);
     return b->map_result;
+}
+
+/* The Deskbar clock's standing (TIKU_SHELL_CLOCK_STATE): the kernel's
+ * wall-clock state, which tiku_rtc_state() reads safely on this thread. */
+int tiku_shell_clock_state(void)
+{
+    switch (surface_os_clock_state()) {
+    case SURFACE_CLOCK_SET:
+        return TIKU_TRK_CLOCK_CURRENT;
+    case SURFACE_CLOCK_RESUMED:
+        return TIKU_TRK_CLOCK_RESUMED;
+    default:
+        return TIKU_TRK_CLOCK_UNSET;
+    }
 }
 
 /* The shell's pointer map (TIKU_SHELL_TOUCH), which its calibration page

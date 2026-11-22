@@ -22,7 +22,6 @@ DESKTOP_KIT_SRCS := $(filter-out interface/tiku_font.c,$(shell python3 $(DESKTOP
 DESKTOP_PLATFORM_SRCS := $(wildcard $(DESKTOP_ROOT)/desktop/*.c)
 # The candidate's panel presentation and touch-settings codec, unchanged.
 DESKTOP_SURFACE_SRCS := platform/tikuos/presentation.c shell/settings.c desktop/heap_profile.c
-DESKTOP_EPOCH := $(shell git -C $(F) log -1 --format=%ct 2>/dev/null || echo 1795000000)
 # The last code point the desktop's faces carry; see tools/desktop_fonts.py.
 DESKTOP_FONT_LAST ?= 0x24f
 DESKTOP_GEN := $(DESKTOP_BUILD)/generated
@@ -57,7 +56,7 @@ DESKTOP_CFLAGS := $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOU
     -ffunction-sections -fdata-sections -fstack-usage -Wall -Wno-unused-parameter \
     -DTIKU_SURFACE_TIKUOS=1 -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DTIKU_WORK_INLINE=1 \
     -DSURFACE_TOUCH_MODE=$(SURFACE_TOUCH_MODE) \
-    -DSURFACE_EPOCH=$(DESKTOP_EPOCH)LL -include $(DESKTOP_ROOT)/desktop/tikuos_libc.h \
+    -include $(DESKTOP_ROOT)/desktop/tikuos_libc.h \
     -include $(DESKTOP_GEN)/tiku_sdk_identity.h $(DESKTOP_LIMITS) $(DESKTOP_INCLUDES)
 
 # An argument list that does not match its format is an error in the shell,

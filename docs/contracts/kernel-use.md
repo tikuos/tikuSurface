@@ -23,7 +23,9 @@ describes.
 | Desktop memory | One PSRAM tier arena, `tiku_tier_arena_create_span` | `platform/tikuos/bindings.c` | Start | Until restart |
 | The desktop thread | `tiku_thread_start`, `_wait`, `_wake_all`, `_exit` | `platform/tikuos/desktop_bindings.c` | Desktop thread | Until restart |
 | The owner turn | One process, `surface_process`, woken by a timer and by polls | `platform/tikuos/bindings.c` | Kernel | Until restart |
-| Monotonic time | `tiku_s31_time` | `surface_os_time()` | Both | Since boot |
+| Monotonic time | `tiku_clock_usec` | `surface_os_time()` | Both | Since boot |
+| Wall-clock time | `tiku_rtc_read`, through TikuOS's `compat/posix` `clock_gettime`, `gettimeofday` and `time` | Linked with `TIKU_POSIX_ENABLE := 1`, `desktop/firmware.mk` | Desktop thread | Durable |
+| The clock's standing | `tiku_rtc_state`: unset, set this boot, or resumed after a restart | `surface_os_clock_state()`; the Deskbar's `tiku_shell_clock_state()`; file times are 0 while unset | Desktop thread | Boot |
 | SD card, reading | Media card service: mount, enumerate, open, read | `platform/tikuos/media_io.c` | Owner turn | Card |
 | Touch calibration | File store record `tikusurface-cal-v1` in `/data` | `platform/tikuos/settings_io.c` | Owner turn | Durable |
 | Random source | `tiku_trng_arch_read_bytes` | `surface_os_desktop_random()` | Desktop thread | Seed |
@@ -36,7 +38,6 @@ describes.
 | --- | --- | --- | --- |
 | Files, directories, descriptors | A tree in the desktop's heap, `desktop/posix.c` | Stomme and newlib call POSIX; the tree is lost at every restart | The VFS, `/data` and the media store, through a POSIX library in TikuOS |
 | Desktop settings and per-file state | Files in that tree: `TrackerSettings`, `tracker/types`, `devices/local.state` | As above; lost at every restart | `/data` |
-| Wall-clock time | `wall()` and `clock_gettime()` in `desktop/posix.c`: the build's commit time plus uptime | No binding to the kernel clock was written | `tiku_rtc_get_seconds`, `tiku_rtc_is_set` |
 | The desktop's heap | newlib's allocator over the arena, `_sbrk_r` in `desktop/posix.c` | The kernel gives no C-library heap by design; the arena is the kernel's | Stays |
 | Random numbers for the desktop | SHA-256 in counter mode over a TRNG seed, `desktop/posix.c` | `/dev/urandom` for the desktop's tree | Stays with the file layer |
 | Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash | TikuOS has no path for a worker's request into kernel context | A kernel request path |
@@ -61,5 +62,6 @@ shell, BASIC jobs, Wi-Fi status and card writes through `vfs_io.c`,
 ## Checks
 
 The native image's post-link step refuses a system call taken from libnosys
-(`tools/libc_stubs.py`). `tests/test_posix_layer.c` builds `desktop/posix.c`
+(`tools/libc_stubs.py`); without the library, `clock_gettime` would come from
+libnosys and fail the link. `tests/test_posix_layer.c` builds `desktop/posix.c`
 on the host under the address and undefined-behaviour sanitizers.

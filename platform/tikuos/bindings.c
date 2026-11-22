@@ -7,6 +7,7 @@
 #include "boot.h"
 #include <kernel/memory/tiku_mem.h>
 #include <kernel/process/tiku_process.h>
+#include <kernel/timers/tiku_clock.h>
 #include <kernel/timers/tiku_timer.h>
 #include <kernel/threads/tiku_thread.h>
 #include <arch/esp32s31/tiku_runtime_arch.h>
@@ -41,7 +42,7 @@ int surface_os_free_bytes(uint32_t *bytes)
 }
 
 uint64_t surface_os_time(void)
-{ return (tiku_s31_time() / 16u); }
+{ return tiku_clock_usec(); }
 
 /** @brief Dispatch bounded owner turns with a timer fallback and queued LCD continuations. */
 TIKU_PROCESS_THREAD(surface_process, ev, data)

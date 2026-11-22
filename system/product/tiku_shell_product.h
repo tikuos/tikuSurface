@@ -15,6 +15,9 @@
  *  16 px face, a count line and scroll bar that follow it, and a magnified
  *  view for presses on small controls. */
 #define TIKU_SHELL_TOUCH SURFACE_TOUCH_MODE
+/** @brief The Deskbar clock shows the kernel wall clock's standing: unset,
+ *  or carried over a restart and not current. */
+#define TIKU_SHELL_CLOCK_STATE 1
 /** @brief Enable remote text input, accessibility, links and printing. */
 #define TIKU_SHELL_REMOTE_SERVICES 0
 /** @brief Enable note placement with automatic title-tab hiding. */

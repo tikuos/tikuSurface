@@ -12,7 +12,6 @@
 #define chdir pxchdir
 #define chmod pxchmod
 #define chown pxchown
-#define clock_gettime pxclock_gettime
 #define _close px_close
 #define closedir pxclosedir
 #define execlp pxexeclp
@@ -28,7 +27,6 @@
 #define geteuid pxgeteuid
 #define getloadavg pxgetloadavg
 #define _getpid px_getpid
-#define _gettimeofday px_gettimeofday
 #define _isatty px_isatty
 #define lchown pxlchown
 #define _link px_link

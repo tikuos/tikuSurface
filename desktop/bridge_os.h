@@ -42,6 +42,16 @@ int surface_os_in_desktop(void);
 int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp);
 /** @brief Fill @p bytes from the hardware random source; 0, or -1 on a fault. */
 int surface_os_desktop_random(void *bytes, size_t length);
+/** @brief The kernel wall clock's standing: never set, set during this boot,
+ *         or set before a restart and carried over it. */
+enum {
+    SURFACE_CLOCK_UNSET = 0,
+    SURFACE_CLOCK_SET,
+    SURFACE_CLOCK_RESUMED
+};
+/** @brief The wall clock's SURFACE_CLOCK_* standing, from tiku_rtc_state();
+ *         callable from the desktop thread and the kernel. */
+int surface_os_clock_state(void);
 /** @brief Enter and leave the interrupt-masked section; calls nest. */
 void surface_os_desktop_lock(void);
 void surface_os_desktop_unlock(void);

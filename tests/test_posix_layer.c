@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include "bridge.h"
 #include "tiku_crypto.h"
@@ -37,6 +38,8 @@ void surface_os_desktop_unlock(void) {}
 void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us)
 { (void)ready; (void)context; (void)timeout_us; }
 int surface_os_desktop_random(void *bytes, size_t length) { memset(bytes, 7, length); return 0; }
+static int clock_state = SURFACE_CLOCK_SET;
+int surface_os_clock_state(void) { return clock_state; }
 void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
 
 /** @brief Create an empty file at @p path. */
@@ -117,7 +120,24 @@ int main(void)
     assert(!strcmp(next(d), ""));
     assert(closedir(d) == 0);
 
+    /* A file's times: none while the clock was never set, the clock's time
+     * once it is, carried over a restart or not. */
+    {
+        struct stat st;
+        time_t now = time(NULL);
+
+        clock_state = SURFACE_CLOCK_UNSET;
+        touch("/tmp/undated");
+        assert(_stat("/tmp/undated", &st) == 0 && st.st_mtime == 0);
+        clock_state = SURFACE_CLOCK_RESUMED;
+        touch("/tmp/resumed");
+        assert(_stat("/tmp/resumed", &st) == 0 && st.st_mtime >= now && st.st_mtime <= now + 5);
+        clock_state = SURFACE_CLOCK_SET;
+        touch("/tmp/dated");
+        assert(_stat("/tmp/dated", &st) == 0 && st.st_mtime >= now && st.st_mtime <= now + 5);
+    }
+
     puts("posix layer: the home's note is seeded; directory streams outlive the "
-         "entries they reach");
+         "entries they reach; files have no date while the clock is unset");
     return 0;
 }

@@ -11,6 +11,7 @@
  */
 #include "../../desktop/bridge_os.h"
 #include <hal/tiku_cpu.h>
+#include <kernel/cpu/tiku_rtc.h>
 #include <kernel/process/tiku_process.h>
 #include <kernel/threads/tiku_thread.h>
 #include <kernel/timers/tiku_clock.h>
@@ -136,4 +137,16 @@ int surface_os_card_mount(void)
 {
     /* Mounting discovers the volume's UUID and writes nothing. */
     return tiku_media_card_mount(NULL, NULL, SURFACE_CARD_HZ);
+}
+
+int surface_os_clock_state(void)
+{
+    switch (tiku_rtc_state()) {
+    case TIKU_RTC_SET:
+        return SURFACE_CLOCK_SET;
+    case TIKU_RTC_RESUMED:
+        return SURFACE_CLOCK_RESUMED;
+    default:
+        return SURFACE_CLOCK_UNSET;
+    }
 }
