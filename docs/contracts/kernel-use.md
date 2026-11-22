@@ -27,7 +27,8 @@ describes.
 | Wall-clock time | `tiku_rtc_read`, through TikuOS's `compat/posix` `clock_gettime`, `gettimeofday` and `time` | Linked with `TIKU_POSIX_ENABLE := 1`, `desktop/firmware.mk` | Desktop thread | Durable |
 | The clock's standing | `tiku_rtc_state`: unset, set this boot, or resumed after a restart | `surface_os_clock_state()`; the Deskbar's `tiku_shell_clock_state()`; file times are 0 while unset | Desktop thread | Boot |
 | SD card, reading | Media card service: mount, enumerate, open, read | `platform/tikuos/media_io.c` | Owner turn | Card |
-| Mutexes | TikuOS's `compat/posix` threads group: `pthread_mutex_*` on kernel wait queues | Linked with the library; `desktop/posix.c` defines none | Desktop thread | Call |
+| Background work | Stomme's jobs (`tiku_work.c`, `TIKU_WORK_WORKERS=1`) on one thread of TikuOS's `compat/posix` threads group: a kernel worker with a 1 MiB stack in the runtime's PSRAM span | `desktop/desktop.mk`, `desktop/firmware.mk`; `surface_os_desktop_jobs_memory()` | Job thread | Until restart |
+| Mutexes, condition variables, the C library's locks | TikuOS's `compat/posix` threads group: `pthread_mutex_*`, `pthread_cond_*` and newlib's stream, environment and time-zone locks on kernel wait queues | Linked with the library; `desktop/posix.c` defines none; the status line's `locks=` shows their use | Desktop and job threads | Call |
 | The kernel's namespace, read | `/Board` in the desktop's tree: `compat/posix`'s read group over `tiku_vfs_read_at` and `tiku_vfs_list`, each call on the kernel thread through `tiku_thread_call` | `desktop/posix.c` routes `/Board` paths to `tiku_posix_*`; changes are refused with `EROFS` | Desktop thread | Call |
 | Touch calibration | File store record `tikusurface-cal-v1` in `/data` | `platform/tikuos/settings_io.c` | Owner turn | Durable |
 | Random source | `tiku_trng_arch_read_bytes` | `surface_os_desktop_random()` | Desktop thread | Seed |
@@ -38,13 +39,12 @@ describes.
 
 | Facility | Product code | Why it is here | Kernel provider to use |
 | --- | --- | --- | --- |
-| Files, directories, descriptors | A tree in the desktop's heap, `desktop/posix.c` | Stomme and newlib call POSIX; the tree is lost at every restart | The VFS, `/data` and the media store, through a POSIX library in TikuOS |
+| Files, directories, descriptors | A tree in the desktop's heap, `desktop/posix.c`, under one lock that a card request gives back while it waits | Stomme and newlib call POSIX; the tree is lost at every restart | The VFS, `/data` and the media store, through a POSIX library in TikuOS |
 | Desktop settings and per-file state | Files in that tree: `TrackerSettings`, `tracker/types`, `devices/local.state` | As above; lost at every restart | `/data` |
 | The desktop's heap | newlib's allocator over the arena, `_sbrk_r` in `desktop/posix.c` | The kernel gives no C-library heap by design; the arena is the kernel's | Stays |
 | Random numbers for the desktop | SHA-256 in counter mode over a TRNG seed, `desktop/posix.c` | `/dev/urandom` for the desktop's tree | Stays with the file layer |
-| Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash | Written before the kernel had a path for a worker's request; `/Board` reads use the kernel's | `tiku_thread_call` |
+| Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash; the desktop and job threads take turns on the card's | Written before the kernel had a path for a worker's request; `/Board` reads use the kernel's | `tiku_thread_call` |
 | Change notices | A counter of tree changes the desktop polls, `tiku_posix_mutations()` | Changes happen only in the desktop's own tree | `tiku_vfs_watch` and the VFS change ring |
-| Background work | Stomme's jobs run on the desktop thread (`tiku_work_inline.c`) | The threaded pool needs pthreads | Kernel worker threads |
 | Profiler samples | Reads a worker's saved context from the thread control block, `surface_os_desktop_sample()` | The kernel has no call for it | A kernel sampling call |
 | SD card view | `/Card` as a read-only tree in `desktop/posix.c` | Writes are not bound | The media store's write operations |
 
@@ -66,4 +66,7 @@ shell, BASIC jobs, Wi-Fi status and card writes through `vfs_io.c`,
 The native image's post-link step refuses a system call taken from libnosys
 (`tools/libc_stubs.py`); without the library, `clock_gettime` would come from
 libnosys and fail the link. `tests/test_posix_layer.c` builds `desktop/posix.c`
-on the host under the address and undefined-behaviour sanitizers.
+on the host under the address and undefined-behaviour sanitizers, and
+`tests/test_posix_threads.c` calls it from several threads against a card
+whose requests the test holds open, under the thread sanitizer and under the
+address sanitizer.

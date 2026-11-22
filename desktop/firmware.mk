@@ -45,6 +45,10 @@ S31_LDFLAGS += -Wl,-u,tiku_s31_sd_open_begin,-u,tiku_s31_sd_read_begin,-u,tiku_s
 # library's are left out.
 TIKU_POSIX_ENABLE := 1
 TIKU_POSIX_FILE_HOOKS := 0
+# Stomme's jobs run on one thread of the library (TIKU_WORK_WORKERS in
+# desktop.mk); the desktop's mutexes and conditions, its kits' among them,
+# fit the tables with room to spare, and the status line shows their use.
+APPL_CFLAGS += -DTIKU_POSIX_THREADS=1 -DTIKU_POSIX_MUTEXES=32 -DTIKU_POSIX_CONDS=16
 APPL_EXTRA_OBJS := $(S31_DIR)/tikuSurface/surface-ui.o
 APPL_LINKER := $(S31_DIR)/surface.ld
 S31_LDFLAGS += -Wl,-u,tiku_application_stop,-u,surface_runtime_launch,-u,surface_runtime_fail_at

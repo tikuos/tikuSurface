@@ -23,6 +23,7 @@
 #include "../platform/tikuos/settings_io.h"
 #include "gesture.h"
 #include "tiku_trk_deskbar.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -34,6 +35,11 @@
  * STACK_PAINT at start; the status line reports the deepest use seen. */
 #define STACK_BYTES (3072u * 1024u)
 #define STACK_PAINT 0xa5a5a5a5u
+/* The stack of the desktop's job thread (TIKU_WORK_WORKERS in
+ * desktop/desktop.mk), from compat/posix: a job runs frames as deep as the
+ * Trash's 280,640 bytes.  Painted as the desktop's is; the status line
+ * reports its deepest use. */
+#define JOBS_BYTES (1024u * 1024u)
 #define STACK_SCAN_WORDS 4096u   /* words examined per turn for the high-water mark */
 #define SAMPLE_SLOTS 4096u       /* program counters kept, one per kernel turn */
 #define SAMPLE_LINE 48u          /* samples printed per turn by the dump */
@@ -107,6 +113,9 @@ static struct {
     uint32_t *stack;          /* lowest word of the desktop thread's stack */
     uint32_t stack_scan;      /* next word the high-water scan examines */
     uint32_t stack_used;      /* deepest use found, in bytes */
+    uint32_t *jobs;           /* lowest word of the job thread's stack */
+    uint32_t jobs_scan;       /* next word its high-water scan examines */
+    uint32_t jobs_used;       /* its deepest use found, in bytes */
     uint64_t burst_start, last_status;
     int capturing;
     unsigned capture_row;
@@ -265,14 +274,20 @@ static int card_finished(void *context)
     return surface_desktop_bridge.card_done == surface_desktop_bridge.card_token;
 }
 
+/* The desktop thread and its job thread both ask for card requests; the
+ * bridge carries one at a time. */
+static pthread_mutex_t card_turn = PTHREAD_MUTEX_INITIALIZER;
+
 void surface_desktop_card(surface_media_io_t *io)
 {
     surface_desktop_bridge_t *b = &surface_desktop_bridge;
 
+    (void)pthread_mutex_lock(&card_turn);
     b->card = io;
     b->card_token++;
     surface_os_desktop_kick();
     while (!card_finished(NULL)) surface_os_desktop_wait(card_finished, NULL, 1000000u);
+    (void)pthread_mutex_unlock(&card_turn);
 }
 
 /** @brief Whether the kernel has answered the desktop's touch map request. */
@@ -869,7 +884,7 @@ static void desktop_thread(void *arg)
 
 int surface_runtime_start(void)
 {
-    unsigned char *span, *stack, *heap;
+    unsigned char *span, *stack, *jobs, *heap;
     unsigned char record[SURFACE_SETTINGS_BYTES];
     size_t length = 0;
 
@@ -885,11 +900,18 @@ int surface_runtime_start(void)
     rt.rgb[0] = (uint16_t *)span;
     rt.rgb[1] = (uint16_t *)(span + RGB_BYTES);
     stack = span + 2u * RGB_BYTES;
-    heap = stack + STACK_BYTES;
+    jobs = stack + STACK_BYTES;
+    heap = jobs + JOBS_BYTES;
     rt.stack = (uint32_t *)(void *)stack;
     for (uint32_t i = 0; i < STACK_BYTES / 4u; i++) rt.stack[i] = STACK_PAINT;
+    rt.jobs = (uint32_t *)(void *)jobs;
+    for (uint32_t i = 0; i < JOBS_BYTES / 4u; i++) rt.jobs[i] = STACK_PAINT;
     memset(rt.rgb[0], 0, 2u * RGB_BYTES);
-    surface_desktop_heap(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES);
+    surface_desktop_heap(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES - JOBS_BYTES);
+    if (surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0) {
+        rt.failed = 1;
+        return 0;
+    }
     card_submitted = 0;
     if (surface_os_media_size() <= sizeof card_bridge) {
         surface_os_media_init(card_bridge);
@@ -923,6 +945,25 @@ int surface_runtime_start(void)
 void surface_runtime_stop(void)
 {
     /* The desktop thread runs until the board resets. */
+}
+
+/** @brief One step of a stack's high-water scan.  The stack grows down:
+ *  the first word above the bottom that no longer holds the paint marks the
+ *  deepest use.  A pass covers the whole stack over several turns and then
+ *  starts again; word 0 holds the thread's canary, not paint. */
+static void paint_scan(const uint32_t *words, uint32_t bytes, uint32_t *scan, uint32_t *used)
+{
+    uint32_t end = *scan + STACK_SCAN_WORDS;
+
+    if (end > bytes / 4u) end = bytes / 4u;
+    if (*scan == 0u) *scan = 1u;
+    while (*scan < end && words[*scan] == STACK_PAINT) (*scan)++;
+    if (*scan < end || end == bytes / 4u) {
+        uint32_t deepest = bytes - *scan * 4u;
+
+        if (deepest > *used) *used = deepest;
+        *scan = 0;
+    }
 }
 
 int surface_runtime_poll(void)
@@ -1012,41 +1053,29 @@ int surface_runtime_poll(void)
     } else {
         drain_log();
     }
-    /* The stack grows down: the first word above the bottom that no longer
-     * holds the paint marks the deepest use.  A pass covers the whole stack
-     * over several turns and then starts again. */
-    if (rt.stack != NULL) {
-        uint32_t end = rt.stack_scan + STACK_SCAN_WORDS;
-
-        if (end > STACK_BYTES / 4u) end = STACK_BYTES / 4u;
-        /* Word 0 holds the thread's canary, not paint. */
-        if (rt.stack_scan == 0u) rt.stack_scan = 1u;
-        while (rt.stack_scan < end && rt.stack[rt.stack_scan] == STACK_PAINT) rt.stack_scan++;
-        if (rt.stack_scan < end || end == STACK_BYTES / 4u) {
-            uint32_t used = STACK_BYTES - rt.stack_scan * 4u;
-
-            if (used > rt.stack_used) rt.stack_used = used;
-            rt.stack_scan = 0;
-        }
-    }
+    if (rt.stack != NULL) paint_scan(rt.stack, STACK_BYTES, &rt.stack_scan, &rt.stack_used);
+    if (rt.jobs != NULL) paint_scan(rt.jobs, JOBS_BYTES, &rt.jobs_scan, &rt.jobs_used);
     if (!rt.capturing && rt.sample_dump == UINT32_MAX && rt.stacks_dump == UINT32_MAX &&
         begin - rt.last_status >= STATUS_US) {
-        char line[480];
+        char line[560];
         int n;
 
         size_t used = 0, total = 0, largest = 0;
         uint32_t refused = 0, console = 0, files = 0, calls = 0;
         uint64_t mutations = 0;
         const char *last = "";
+        unsigned lock_mutexes = 0, lock_conds = 0, lock_refused = 0;
 
         rt.last_status = begin;
         surface_desktop_heap_use(&used, &total);
         surface_desktop_heap_refused(&refused, &largest);
         surface_desktop_write_stats(&console, &files, &calls, &last);
         (void)tiku_posix_mutations(&mutations);
+        surface_os_desktop_lock_use(&lock_mutexes, &lock_conds, &lock_refused);
         n = snprintf(line, sizeof line,
                      "desktop: turns=%lu frames=%lu waits=%lu events=%u/%u present=%lu/%lu phase=%u max_us=%lu"
-                     " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu writes=%lu/%lu/%lu:%.24s"
+                     " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu locks=%u/%u/%u"
+                     " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
                      " card=%lu/%lu/%lu/%lu/%lu mutations=%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
@@ -1055,6 +1084,8 @@ int surface_runtime_poll(void)
                      (unsigned long)rt.max_turn_us, (unsigned long)used, (unsigned long)total,
                      (unsigned long)refused, (unsigned long)largest,
                      (unsigned long)rt.stack_used, (unsigned long)STACK_BYTES,
+                     (unsigned long)rt.jobs_used, (unsigned long)JOBS_BYTES,
+                     lock_mutexes, lock_conds, lock_refused,
                      (unsigned long)console, (unsigned long)files, (unsigned long)calls, last,
                      (unsigned long)(begin / 1000u), (unsigned long)rt.frame.frame_us,
                      (unsigned long)rt.frame.max_frame_us, (unsigned long)rt.input_us,

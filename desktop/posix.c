@@ -156,8 +156,82 @@ typedef struct {
     off_t pos;
     int flags;
     uint64_t reader;    /* a card file's open reader, or 0 */
+    unsigned gen;       /* opens of this number so far */
+    int busy;           /* a card request on it is outstanding */
 } fd_t;
 static fd_t fds[FDS];
+
+/*---------------------------------------------------------------------------*/
+/* THE LAYER'S LOCK                                                          */
+/*---------------------------------------------------------------------------*/
+/* One lock over the tree, the descriptors, the directory streams and the
+ * card's listing state.  Each system call below holds it from entry to
+ * return, and a call made inside another holds it again.  A card request
+ * gives back every hold while the owner runs it and takes them again after,
+ * so other threads use the layer meanwhile; what a call keeps across that
+ * wait is a /Card node, which is never freed, or a descriptor it marked
+ * busy.  The kernel thread enters the layer only before the desktop thread
+ * starts, when no other thread holds it. */
+static pthread_mutex_t layer = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t layer_moved = PTHREAD_COND_INITIALIZER;
+static pthread_t layer_owner;   /* the holder, 0 when free; read by any thread */
+static unsigned layer_depth;    /* the holder's holds */
+
+static void enter(void)
+{
+    pthread_t self = pthread_self();
+
+    if (__atomic_load_n(&layer_owner, __ATOMIC_RELAXED) == self) {
+        layer_depth++;
+        return;
+    }
+    (void)pthread_mutex_lock(&layer);
+    __atomic_store_n(&layer_owner, self, __ATOMIC_RELAXED);
+    layer_depth = 1u;
+}
+
+static void leave(void)
+{
+    if (--layer_depth == 0u) {
+        __atomic_store_n(&layer_owner, (pthread_t)0, __ATOMIC_RELAXED);
+        (void)pthread_mutex_unlock(&layer);
+    }
+}
+
+/** @brief Give back every hold; the number of them, for enter_again(). */
+static unsigned leave_all(void)
+{
+    unsigned held = layer_depth;
+
+    if (held != 0u) {
+        layer_depth = 1u;
+        leave();
+    }
+    return held;
+}
+
+static void enter_again(unsigned held)
+{
+    if (held != 0u) {
+        enter();
+        layer_depth = held;
+    }
+}
+
+/** @brief Wait, without the lock, until another thread announces a change;
+ *  the caller holds the lock as before on return. */
+static void await_change(void)
+{
+    unsigned held = layer_depth;
+
+    __atomic_store_n(&layer_owner, (pthread_t)0, __ATOMIC_RELAXED);
+    layer_depth = 0u;
+    (void)pthread_cond_wait(&layer_moved, &layer);
+    __atomic_store_n(&layer_owner, pthread_self(), __ATOMIC_RELAXED);
+    layer_depth = held;
+}
+
+static void announce_change(void) { (void)pthread_cond_broadcast(&layer_moved); }
 
 /** @brief Seconds of wall time for a file's times, from the kernel's clock
  *  through compat/posix; 0, which Tracker shows as no date, while the clock
@@ -241,11 +315,14 @@ static rnode_t *child_named(rnode_t *dir, const char *name, size_t len)
 #define CARD_NAME 64u                 /* bytes of a media name, NUL included */
 #define CARD_READ 1024u               /* bytes one read request returns */
 #define CARD_ENTRIES 4096u            /* enumeration steps one listing takes */
+#define CARD_UNLISTED 0               /* a directory's entries are not read */
+#define CARD_LISTING 1                /* a thread is reading them */
+#define CARD_LISTED 2                 /* they are in the tree */
 
 typedef struct card_node {
     char name[CARD_NAME];   /* a file's full name; a directory's prefix */
     uint64_t epoch, rank;   /* where the enumeration found a file */
-    int loaded;             /* a directory's entries are in the tree */
+    int loaded;             /* a directory's CARD_* listing state */
     unsigned char *head;    /* a file's first bytes, once read, or NULL */
     size_t head_len;        /* bytes in head */
 } card_node_t;
@@ -268,6 +345,16 @@ static int card_mark(rnode_t *n, const char *name, size_t len)
     return 0;
 }
 
+/** @brief Run one card request, with the layer's holds given back while the
+ *  owner runs it. */
+static void card_request(surface_media_io_t *io)
+{
+    unsigned held = leave_all();
+
+    surface_desktop_card(io);
+    enter_again(held);
+}
+
 /** @brief List the card objects under @p dir's prefix into the tree: the
  *  first name segment past the prefix becomes a directory, a name without
  *  one a file.  A changed names epoch ends the listing where it stands. */
@@ -277,8 +364,12 @@ static void card_load(rnode_t *dir)
     char prefix[CARD_NAME];
     size_t n = strlen(dir->card->name);
 
-    dir->card->loaded = 1;
-    if (n + 2u > CARD_NAME) return;
+    dir->card->loaded = CARD_LISTING;
+    if (n + 2u > CARD_NAME) {
+        dir->card->loaded = CARD_LISTED;
+        announce_change();
+        return;
+    }
     memcpy(prefix, dir->card->name, n);
     if (n) prefix[n++] = '/';
     prefix[n] = '\0';
@@ -289,7 +380,7 @@ static void card_load(rnode_t *dir)
         char found[CARD_NAME];
 
         io.operation = SURFACE_MEDIA_ENUMERATE;
-        surface_desktop_card(&io);
+        card_request(&io);
         if (io.result != SURFACE_MEDIA_OK) break;
         memcpy(found, io.found, CARD_NAME);
         found[CARD_NAME - 1u] = '\0';
@@ -328,13 +419,23 @@ static void card_load(rnode_t *dir)
             io.exclusive = 1;
         }
     }
+    dir->card->loaded = CARD_LISTED;
+    announce_change();
+}
+
+/** @brief Have card directory @p dir's entries in the tree: list them, or
+ *  wait while another thread lists them. */
+static void card_ready(rnode_t *dir)
+{
+    while (dir->card->loaded == CARD_LISTING) await_change();
+    if (dir->card->loaded == CARD_UNLISTED) card_load(dir);
 }
 
 /** @brief @p dir's child named by @p len bytes of @p name, listing a card
  *  directory first. */
 static rnode_t *child_in(rnode_t *dir, const char *name, size_t len)
 {
-    if (dir->card != NULL && S_ISDIR(dir->mode) && !dir->card->loaded) card_load(dir);
+    if (dir->card != NULL && S_ISDIR(dir->mode)) card_ready(dir);
     return child_named(dir, name, len);
 }
 
@@ -397,7 +498,7 @@ static uint64_t card_open(const rnode_t *n)
     memcpy(io.name, n->card->name, CARD_NAME);
     io.epoch = n->card->epoch;
     io.rank = n->card->rank;
-    surface_desktop_card(&io);
+    card_request(&io);
     return io.result == SURFACE_MEDIA_OK ? io.reader : 0;
 }
 
@@ -409,7 +510,7 @@ static void card_close(uint64_t reader)
     memset(&io, 0, sizeof io);
     io.operation = SURFACE_MEDIA_CLOSE;
     io.reader = reader;
-    surface_desktop_card(&io);
+    card_request(&io);
 }
 
 /** @brief Read up to @p n bytes at @p at; the bytes read, or -1. */
@@ -427,7 +528,7 @@ static _ssize_t card_read(uint64_t reader, unsigned char *buf, size_t n, off_t a
         io.offset = (uint64_t)at + done;
         io.bytes = buf + done;
         io.length = want;
-        surface_desktop_card(&io);
+        card_request(&io);
         if (io.result != SURFACE_MEDIA_OK) {
             if (done) break;
             errno = EIO;
@@ -595,6 +696,7 @@ static int make_dirs(const char *path)
 int _open(const char *path, int flags, int mode);
 _ssize_t _write(int fd, const void *buf, size_t n);
 int _close(int fd);
+int _stat(const char *path, struct stat *st);
 
 /** @brief Create @p path with @p text and @p mode, making its directories. */
 static void seed(const char *path, const char *text, mode_t mode)
@@ -677,7 +779,7 @@ extern char **environ;
 static char *desktop_environment[] = { "HOME=/home", "USER=tiku", "LANG=en_US.UTF-8", NULL };
 
 /** @brief Build the file tree and the environment the desktop starts in. */
-int surface_desktop_files(void)
+static int surface_desktop_files_locked(void)
 {
     environ = desktop_environment;
     root = node_new(NULL, "", S_IFDIR | 0755);
@@ -724,7 +826,27 @@ static fd_t *fd_of(int fd)
     return &fds[fd];
 }
 
-int _open(const char *path, int flags, int mode)
+/** @brief Give descriptor @p fd to @p n, its last open's number moved on. */
+static void fd_fill(int fd, rnode_t *n, int flags, uint64_t reader)
+{
+    unsigned gen = fds[fd].gen + 1u;
+
+    fds[fd] = (fd_t){ n, 0, flags, reader, gen, 0 };
+}
+
+/** @brief Wait until no card request is outstanding on @p f, which @p gen
+ *  opened; 0, or -1 with EBADF when it was closed meanwhile. */
+static int fd_idle(fd_t *f, unsigned gen)
+{
+    while (f->node != NULL && f->gen == gen && f->busy) await_change();
+    if (f->node == NULL || f->gen != gen) {
+        errno = EBADF;
+        return -1;
+    }
+    return 0;
+}
+
+static int _open_locked(const char *path, int flags, int mode)
 {
     rnode_t *parent = NULL, *n;
     const char *leaf;
@@ -755,7 +877,7 @@ int _open(const char *path, int flags, int mode)
                 errno = EMFILE;
                 return -1;
             }
-            fds[fd] = (fd_t){ &board_device, 0, flags, (uint64_t)board };
+            fd_fill(fd, &board_device, flags, (uint64_t)board);
             return fd;
         }
     }
@@ -800,34 +922,107 @@ descriptor:
     /* A card file's reader is opened by its first read past the bytes the
      * node keeps, so an open that only checks the file costs no card
      * request. */
-    fds[fd] = (fd_t){ n, 0, flags, 0 };
+    fd_fill(fd, n, flags, 0);
     n->opened++;
     return fd;
 }
 
-int _close(int fd)
+static int _close_locked(int fd)
 {
     fd_t *f = fd_of(fd);
 
     if (fd >= 0 && fd < FIRST_FD) return 0;
-    if (f == NULL) return -1;
+    if (f == NULL || fd_idle(f, f->gen) != 0) return -1;
     if (f->node == &board_device) {
         f->node = NULL;
         return tiku_posix_close((int)f->reader);
     }
     if (f->reader != 0) {
-        card_close(f->reader);
+        uint64_t reader = f->reader;
+
+        /* Busy while the owner closes the reader: another call on this
+         * descriptor waits, then finds it closed. */
         f->reader = 0;
+        f->busy = 1;
+        card_close(reader);
+        f->busy = 0;
+        announce_change();
     }
     if (--f->node->opened == 0 && f->node->unlinked && f->node != &random_device) node_free(f->node);
     f->node = NULL;
     return 0;
 }
 
-_ssize_t _read(int fd, void *buf, size_t n)
+/** @brief Read up to @p n bytes of card file @p f, which @p gen opened, at
+ *  @p pos, and move its offset past them when @p move.  The descriptor is
+ *  busy until the bytes are in @p buf. */
+static _ssize_t card_file_read(fd_t *f, unsigned gen, unsigned char *buf, size_t n, off_t pos,
+                               int move)
+{
+    rnode_t *node = f->node;
+    card_node_t *c = node->card;
+    _ssize_t got = -1;
+
+    if (fd_idle(f, gen) != 0) return -1;
+    f->busy = 1;
+    if ((size_t)pos >= node->size) {
+        got = 0;
+        goto done;
+    }
+    if (n > node->size - (size_t)pos) n = node->size - (size_t)pos;
+    if (c->head == NULL && pos == 0) {
+        /* The first bytes are kept: type checks and value columns read
+         * them again and again, and each card request is slow. */
+        size_t want = node->size < CARD_READ ? node->size : CARD_READ;
+        unsigned char *head;
+
+        if (f->reader == 0 && (f->reader = card_open(node)) == 0) {
+            errno = EIO;
+            goto done;
+        }
+        head = malloc(want ? want : 1u);
+        if (head != NULL) {
+            _ssize_t k = card_read(f->reader, head, want, 0);
+
+            if (k < 0) {
+                free(head);
+                goto done;
+            }
+            /* Another thread may have kept them while this one read. */
+            if (c->head == NULL) {
+                c->head = head;
+                c->head_len = (size_t)k;
+            } else {
+                free(head);
+            }
+        }
+    }
+    if (c->head != NULL && (size_t)pos < c->head_len) {
+        size_t k = c->head_len - (size_t)pos;
+
+        if (k > n) k = n;
+        memcpy(buf, c->head + pos, k);
+        got = (_ssize_t)k;
+        goto done;
+    }
+    if (f->reader == 0 && (f->reader = card_open(node)) == 0) {
+        errno = EIO;
+        goto done;
+    }
+    got = card_read(f->reader, buf, n, pos);
+done:
+    if (got > 0 && move) f->pos = pos + got;
+    f->busy = 0;
+    announce_change();
+    return got;
+}
+
+/** @brief Read up to @p n bytes of @p fd at @p at, or at its offset, which
+ *  then moves past them, when @p at is NULL. */
+static _ssize_t read_at(int fd, void *buf, size_t n, const off_t *at)
 {
     fd_t *f;
-    size_t left;
+    off_t pos;
 
     if (fd >= 0 && fd < FIRST_FD) return 0;
     f = fd_of(fd);
@@ -849,56 +1044,17 @@ _ssize_t _read(int fd, void *buf, size_t n)
         errno = EISDIR;
         return -1;
     }
-    if (f->node->card != NULL && S_ISREG(f->node->mode)) {
-        card_node_t *c = f->node->card;
-        _ssize_t got;
-
-        if ((size_t)f->pos >= f->node->size) return 0;
-        left = f->node->size - (size_t)f->pos;
-        if (n > left) n = left;
-        if (c->head == NULL && f->pos == 0) {
-            /* The first bytes are kept: type checks and value columns read
-             * them again and again, and each card request is slow. */
-            size_t want = f->node->size < CARD_READ ? f->node->size : CARD_READ;
-
-            if (f->reader == 0 && (f->reader = card_open(f->node)) == 0) {
-                errno = EIO;
-                return -1;
-            }
-            c->head = malloc(want ? want : 1u);
-            if (c->head != NULL) {
-                got = card_read(f->reader, c->head, want, 0);
-                if (got < 0) {
-                    free(c->head);
-                    c->head = NULL;
-                    return -1;
-                }
-                c->head_len = (size_t)got;
-            }
-        }
-        if (c->head != NULL && (size_t)f->pos < c->head_len) {
-            size_t k = c->head_len - (size_t)f->pos;
-
-            if (k > n) k = n;
-            memcpy(buf, c->head + f->pos, k);
-            f->pos += (off_t)k;
-            return (_ssize_t)k;
-        }
-        if (f->reader == 0 && (f->reader = card_open(f->node)) == 0) {
-            errno = EIO;
-            return -1;
-        }
-        got = card_read(f->reader, buf, n, f->pos);
-        if (got > 0) f->pos += got;
-        return got;
-    }
-    if ((size_t)f->pos >= f->node->size) return 0;
-    left = f->node->size - (size_t)f->pos;
-    if (n > left) n = left;
-    memcpy(buf, f->node->data + f->pos, n);
-    f->pos += (off_t)n;
+    pos = at != NULL ? *at : f->pos;
+    if (f->node->card != NULL && S_ISREG(f->node->mode))
+        return card_file_read(f, f->gen, buf, n, pos, at == NULL);
+    if ((size_t)pos >= f->node->size) return 0;
+    if (n > f->node->size - (size_t)pos) n = f->node->size - (size_t)pos;
+    memcpy(buf, f->node->data + pos, n);
+    if (at == NULL) f->pos = pos + (off_t)n;
     return (_ssize_t)n;
 }
+
+static _ssize_t _read_locked(int fd, void *buf, size_t n) { return read_at(fd, buf, n, NULL); }
 
 /* Bytes written to the console and to files, and the file written last. */
 static uint32_t console_bytes, file_bytes, file_writes;
@@ -915,7 +1071,7 @@ void surface_desktop_write_stats(uint32_t *console, uint32_t *files, uint32_t *c
     *last = last_written != NULL ? last_written->name : "";
 }
 
-_ssize_t _write(int fd, const void *buf, size_t n)
+static _ssize_t _write_locked(int fd, const void *buf, size_t n)
 {
     fd_t *f;
     size_t at;
@@ -944,7 +1100,7 @@ _ssize_t _write(int fd, const void *buf, size_t n)
     return (_ssize_t)n;
 }
 
-off_t _lseek(int fd, off_t offset, int whence)
+static off_t _lseek_locked(int fd, off_t offset, int whence)
 {
     fd_t *f = fd_of(fd);
     off_t base;
@@ -961,7 +1117,7 @@ off_t _lseek(int fd, off_t offset, int whence)
     return f->pos;
 }
 
-int _fstat(int fd, struct stat *st)
+static int _fstat_locked(int fd, struct stat *st)
 {
     fd_t *f;
 
@@ -977,7 +1133,7 @@ int _fstat(int fd, struct stat *st)
     return 0;
 }
 
-int _stat(const char *path, struct stat *st)
+static int _stat_locked(const char *path, struct stat *st)
 {
     char kernel[PATH_MAX];
     rnode_t *n;
@@ -1002,19 +1158,14 @@ int _isatty(int fd) { return fd >= 0 && fd < FIRST_FD; }
  *         argument.  F_GETFD and F_SETFD: 0; there is no exec to close a
  *         descriptor on.  Any other command: -1 with EINVAL.
  */
-int _fcntl(int fd, int cmd, ...)
+static int _fcntl_locked(int fd, int cmd, int arg)
 {
     fd_t *f = fd_of(fd);
-    va_list ap;
-    int arg;
 
     if (f == NULL && !(fd >= 0 && fd < FIRST_FD)) {
         errno = EBADF;
         return -1;
     }
-    va_start(ap, cmd);
-    arg = va_arg(ap, int);
-    va_end(ap);
     switch (cmd) {
     case F_GETFL:
         return (f != NULL) ? f->flags & (O_ACCMODE | O_APPEND | O_NONBLOCK) : O_RDWR;
@@ -1035,21 +1186,9 @@ int _fcntl(int fd, int cmd, ...)
 /** @brief The one process there is; newlib's tmpnam() puts it in a name. */
 int _getpid(void) { return 1; }
 
-ssize_t pread(int fd, void *buf, size_t n, off_t offset)
-{
-    fd_t *f = fd_of(fd);
-    off_t saved;
-    ssize_t got;
+static ssize_t pread_locked(int fd, void *buf, size_t n, off_t offset) { return read_at(fd, buf, n, &offset); }
 
-    if (f == NULL) return -1;
-    saved = f->pos;
-    f->pos = offset;
-    got = _read(fd, buf, n);
-    f->pos = saved;
-    return got;
-}
-
-ssize_t pwrite(int fd, const void *buf, size_t n, off_t offset)
+static ssize_t pwrite_locked(int fd, const void *buf, size_t n, off_t offset)
 {
     fd_t *f = fd_of(fd);
     off_t saved;
@@ -1064,7 +1203,7 @@ ssize_t pwrite(int fd, const void *buf, size_t n, off_t offset)
     return put;
 }
 
-int _unlink(const char *path)
+static int _unlink_locked(const char *path)
 {
     if (read_only_path(path)) return -1;
     rnode_t *n = lookup(path);
@@ -1081,7 +1220,7 @@ int _unlink(const char *path)
     return 0;
 }
 
-int _link(const char *old, const char *new)
+static int _link_locked(const char *old, const char *new)
 {
     if (read_only_path(old) || read_only_path(new)) return -1;
     (void)old; (void)new;
@@ -1097,7 +1236,7 @@ static int is_ancestor(const rnode_t *a, const rnode_t *n)
     return 0;
 }
 
-int _rename(const char *old, const char *new)
+static int _rename_locked(const char *old, const char *new)
 {
     if (read_only_path(old) || read_only_path(new)) return -1;
     rnode_t *from = lookup(old), *parent = NULL, *to;
@@ -1149,7 +1288,7 @@ int _rename(const char *old, const char *new)
     return 0;
 }
 
-int mkdir(const char *path, mode_t mode)
+static int mkdir_locked(const char *path, mode_t mode)
 {
     if (read_only_path(path)) return -1;
     rnode_t *parent = NULL, *n;
@@ -1181,7 +1320,7 @@ int mkdir(const char *path, mode_t mode)
 
 int _mkdir(const char *path, mode_t mode) { return mkdir(path, mode); }
 
-int rmdir(const char *path)
+static int rmdir_locked(const char *path)
 {
     if (read_only_path(path)) return -1;
     rnode_t *n = lookup(path);
@@ -1208,7 +1347,7 @@ int rmdir(const char *path)
 }
 
 /* The desktop owns every node, so the owner's bits answer. */
-int access(const char *path, int mode)
+static int access_locked(const char *path, int mode)
 {
     char kernel[PATH_MAX];
     struct stat st;
@@ -1232,7 +1371,7 @@ int access(const char *path, int mode)
     return 0;
 }
 
-int chdir(const char *path)
+static int chdir_locked(const char *path)
 {
     rnode_t *n = lookup(path);
     char resolved[PATH_MAX];
@@ -1247,7 +1386,7 @@ int chdir(const char *path)
     return 0;
 }
 
-char *getcwd(char *buf, size_t size)
+static char *getcwd_locked(char *buf, size_t size)
 {
     if (buf == NULL || size <= strlen(cwd)) {
         errno = ERANGE;
@@ -1257,7 +1396,7 @@ char *getcwd(char *buf, size_t size)
     return buf;
 }
 
-char *realpath(const char *path, char *resolved)
+static char *realpath_locked(const char *path, char *resolved)
 {
     rnode_t *n = lookup(path), *chain[64];
     int depth = 0;
@@ -1286,7 +1425,7 @@ char *realpath(const char *path, char *resolved)
     return out;
 }
 
-ssize_t readlink(const char *path, char *buf, size_t size)
+static ssize_t readlink_locked(const char *path, char *buf, size_t size)
 {
     (void)buf; (void)size;
     if (lookup(path) != NULL) errno = EINVAL;
@@ -1301,7 +1440,7 @@ int symlink(const char *target, const char *path)
     return -1;
 }
 
-int chmod(const char *path, mode_t mode)
+static int chmod_locked(const char *path, mode_t mode)
 {
     if (read_only_path(path)) return -1;
     rnode_t *n = lookup(path);
@@ -1312,7 +1451,7 @@ int chmod(const char *path, mode_t mode)
     return 0;
 }
 
-int fchmod(int fd, mode_t mode)
+static int fchmod_locked(int fd, mode_t mode)
 {
     fd_t *f = fd_of(fd);
 
@@ -1327,12 +1466,12 @@ int fchmod(int fd, mode_t mode)
     return 0;
 }
 
-int chown(const char *path, uid_t uid, gid_t gid) { (void)uid; (void)gid; return lookup(path) ? 0 : -1; }
+static int chown_locked(const char *path, uid_t uid, gid_t gid) { (void)uid; (void)gid; return lookup(path) ? 0 : -1; }
 int lchown(const char *path, uid_t uid, gid_t gid) { return chown(path, uid, gid); }
 mode_t umask(mode_t mask) { (void)mask; return 022; }
-int fsync(int fd) { return (fd >= 0 && fd < FIRST_FD) || fd_of(fd) ? 0 : -1; }
+static int fsync_locked(int fd) { return (fd >= 0 && fd < FIRST_FD) || fd_of(fd) ? 0 : -1; }
 
-int ftruncate(int fd, off_t length)
+static int ftruncate_locked(int fd, off_t length)
 {
     fd_t *f = fd_of(fd);
 
@@ -1353,7 +1492,7 @@ int ftruncate(int fd, off_t length)
     return 0;
 }
 
-int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags)
+static int utimensat_locked(int dirfd, const char *path, const struct timespec times[2], int flags)
 {
     if (read_only_path(path)) return -1;
     rnode_t *n = lookup(path);
@@ -1369,7 +1508,7 @@ int utimensat(int dirfd, const char *path, const struct timespec times[2], int f
     return 0;
 }
 
-int statvfs(const char *path, struct statvfs *sv)
+static int statvfs_locked(const char *path, struct statvfs *sv)
 {
     size_t used, total;
 
@@ -1416,7 +1555,7 @@ static int fill_template(char *tmpl, size_t suffix)
     return 0;
 }
 
-char *mkdtemp(char *tmpl)
+static char *mkdtemp_locked(char *tmpl)
 {
     char saved[PATH_MAX];
     int tries;
@@ -1436,7 +1575,7 @@ char *mkdtemp(char *tmpl)
     return NULL;
 }
 
-int mkstemps(char *tmpl, int suffix)
+static int mkstemps_locked(char *tmpl, int suffix)
 {
     char saved[PATH_MAX];
     int tries, fd;
@@ -1484,7 +1623,7 @@ static void streams_pass(const rnode_t *n)
     }
 }
 
-DIR *opendir(const char *path)
+static DIR *opendir_locked(const char *path)
 {
     char kernel[PATH_MAX];
     rnode_t *n;
@@ -1509,7 +1648,7 @@ DIR *opendir(const char *path)
         errno = ENOTDIR;
         return NULL;
     }
-    if (n->card != NULL && !n->card->loaded) card_load(n);
+    if (n->card != NULL) card_ready(n);
     d = calloc(1, sizeof *d);
     if (d == NULL) {
         errno = ENOMEM;
@@ -1523,7 +1662,7 @@ DIR *opendir(const char *path)
     return &d->base;
 }
 
-struct dirent *readdir(DIR *dp)
+static struct dirent *readdir_locked(DIR *dp)
 {
     rdir_t *d = (rdir_t *)dp;
 
@@ -1547,7 +1686,7 @@ struct dirent *readdir(DIR *dp)
     return &d->entry;
 }
 
-void rewinddir(DIR *dp)
+static void rewinddir_locked(DIR *dp)
 {
     rdir_t *d = (rdir_t *)dp;
 
@@ -1560,7 +1699,7 @@ void rewinddir(DIR *dp)
     d->dots = 0;
 }
 
-int closedir(DIR *dp)
+static int closedir_locked(DIR *dp)
 {
     rdir_t *d = (rdir_t *)dp, **p;
 
@@ -1634,6 +1773,351 @@ void _exit(int code)
     surface_os_desktop_exit();
     for (;;) {
     }
+}
+
+/*---------------------------------------------------------------------------*/
+/* SYSTEM CALLS UNDER THE LAYER'S LOCK                                       */
+/*---------------------------------------------------------------------------*/
+
+int _open(const char *path, int flags, int mode)
+{
+    int r;
+
+    enter();
+    r = _open_locked(path, flags, mode);
+    leave();
+    return r;
+}
+
+int _close(int fd)
+{
+    int r;
+
+    enter();
+    r = _close_locked(fd);
+    leave();
+    return r;
+}
+
+_ssize_t _read(int fd, void *buf, size_t n)
+{
+    _ssize_t r;
+
+    enter();
+    r = _read_locked(fd, buf, n);
+    leave();
+    return r;
+}
+
+_ssize_t _write(int fd, const void *buf, size_t n)
+{
+    _ssize_t r;
+
+    enter();
+    r = _write_locked(fd, buf, n);
+    leave();
+    return r;
+}
+
+off_t _lseek(int fd, off_t offset, int whence)
+{
+    off_t r;
+
+    enter();
+    r = _lseek_locked(fd, offset, whence);
+    leave();
+    return r;
+}
+
+int _fstat(int fd, struct stat *st)
+{
+    int r;
+
+    enter();
+    r = _fstat_locked(fd, st);
+    leave();
+    return r;
+}
+
+int _stat(const char *path, struct stat *st)
+{
+    int r;
+
+    enter();
+    r = _stat_locked(path, st);
+    leave();
+    return r;
+}
+
+ssize_t pread(int fd, void *buf, size_t n, off_t offset)
+{
+    ssize_t r;
+
+    enter();
+    r = pread_locked(fd, buf, n, offset);
+    leave();
+    return r;
+}
+
+ssize_t pwrite(int fd, const void *buf, size_t n, off_t offset)
+{
+    ssize_t r;
+
+    enter();
+    r = pwrite_locked(fd, buf, n, offset);
+    leave();
+    return r;
+}
+
+int _unlink(const char *path)
+{
+    int r;
+
+    enter();
+    r = _unlink_locked(path);
+    leave();
+    return r;
+}
+
+int _link(const char *old, const char *new)
+{
+    int r;
+
+    enter();
+    r = _link_locked(old, new);
+    leave();
+    return r;
+}
+
+int _rename(const char *old, const char *new)
+{
+    int r;
+
+    enter();
+    r = _rename_locked(old, new);
+    leave();
+    return r;
+}
+
+int mkdir(const char *path, mode_t mode)
+{
+    int r;
+
+    enter();
+    r = mkdir_locked(path, mode);
+    leave();
+    return r;
+}
+
+int rmdir(const char *path)
+{
+    int r;
+
+    enter();
+    r = rmdir_locked(path);
+    leave();
+    return r;
+}
+
+int access(const char *path, int mode)
+{
+    int r;
+
+    enter();
+    r = access_locked(path, mode);
+    leave();
+    return r;
+}
+
+int chdir(const char *path)
+{
+    int r;
+
+    enter();
+    r = chdir_locked(path);
+    leave();
+    return r;
+}
+
+char *getcwd(char *buf, size_t size)
+{
+    char *r;
+
+    enter();
+    r = getcwd_locked(buf, size);
+    leave();
+    return r;
+}
+
+char *realpath(const char *path, char *resolved)
+{
+    char *r;
+
+    enter();
+    r = realpath_locked(path, resolved);
+    leave();
+    return r;
+}
+
+ssize_t readlink(const char *path, char *buf, size_t size)
+{
+    ssize_t r;
+
+    enter();
+    r = readlink_locked(path, buf, size);
+    leave();
+    return r;
+}
+
+int chmod(const char *path, mode_t mode)
+{
+    int r;
+
+    enter();
+    r = chmod_locked(path, mode);
+    leave();
+    return r;
+}
+
+int fchmod(int fd, mode_t mode)
+{
+    int r;
+
+    enter();
+    r = fchmod_locked(fd, mode);
+    leave();
+    return r;
+}
+
+int chown(const char *path, uid_t uid, gid_t gid)
+{
+    int r;
+
+    enter();
+    r = chown_locked(path, uid, gid);
+    leave();
+    return r;
+}
+
+int fsync(int fd)
+{
+    int r;
+
+    enter();
+    r = fsync_locked(fd);
+    leave();
+    return r;
+}
+
+int ftruncate(int fd, off_t length)
+{
+    int r;
+
+    enter();
+    r = ftruncate_locked(fd, length);
+    leave();
+    return r;
+}
+
+int utimensat(int dirfd, const char *path, const struct timespec times[2], int flags)
+{
+    int r;
+
+    enter();
+    r = utimensat_locked(dirfd, path, times, flags);
+    leave();
+    return r;
+}
+
+int statvfs(const char *path, struct statvfs *sv)
+{
+    int r;
+
+    enter();
+    r = statvfs_locked(path, sv);
+    leave();
+    return r;
+}
+
+char *mkdtemp(char *tmpl)
+{
+    char *r;
+
+    enter();
+    r = mkdtemp_locked(tmpl);
+    leave();
+    return r;
+}
+
+int mkstemps(char *tmpl, int suffix)
+{
+    int r;
+
+    enter();
+    r = mkstemps_locked(tmpl, suffix);
+    leave();
+    return r;
+}
+
+DIR *opendir(const char *path)
+{
+    DIR *r;
+
+    enter();
+    r = opendir_locked(path);
+    leave();
+    return r;
+}
+
+struct dirent *readdir(DIR *dp)
+{
+    struct dirent *r;
+
+    enter();
+    r = readdir_locked(dp);
+    leave();
+    return r;
+}
+
+int closedir(DIR *dp)
+{
+    int r;
+
+    enter();
+    r = closedir_locked(dp);
+    leave();
+    return r;
+}
+
+int surface_desktop_files(void)
+{
+    int r;
+
+    enter();
+    r = surface_desktop_files_locked();
+    leave();
+    return r;
+}
+
+int _fcntl(int fd, int cmd, ...)
+{
+    va_list ap;
+    int arg, r;
+
+    va_start(ap, cmd);
+    arg = va_arg(ap, int);
+    va_end(ap);
+    enter();
+    r = _fcntl_locked(fd, cmd, arg);
+    leave();
+    return r;
+}
+
+void rewinddir(DIR *dp)
+{
+    enter();
+    rewinddir_locked(dp);
+    leave();
 }
 
 /*---------------------------------------------------------------------------*/

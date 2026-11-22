@@ -52,6 +52,13 @@ enum {
 /** @brief The wall clock's SURFACE_CLOCK_* standing, from tiku_rtc_state();
  *         callable from the desktop thread and the kernel. */
 int surface_os_clock_state(void);
+/** @brief Give the desktop's job threads @p bytes at @p memory for their
+ *         stacks; 0, or -1 when refused.  Kernel owner only, before the
+ *         desktop thread starts. */
+int surface_os_desktop_jobs_memory(void *memory, size_t bytes);
+/** @brief Mutexes and condition variables in use, and those refused for a
+ *         full table; a refused lock leaves its caller unlocked. */
+void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused);
 /** @brief Enter and leave the interrupt-masked section; calls nest. */
 void surface_os_desktop_lock(void);
 void surface_os_desktop_unlock(void);

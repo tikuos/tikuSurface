@@ -19,6 +19,7 @@
 #include <arch/esp32s31/tiku_trng_arch.h>
 #include <arch/esp32s31/tiku_runtime_arch.h>
 #include <services/storage/tiku_media_card.h>
+#include <compat/posix/tiku_posix.h>
 #include <string.h>
 
 extern struct tiku_process surface_process;
@@ -120,6 +121,17 @@ int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp
     *ra = f[1];
     *sp = (const uint32_t *)(uintptr_t)f[2];
     return 1;
+}
+
+int surface_os_desktop_jobs_memory(void *memory, size_t bytes)
+{
+    if (!tiku_thread_in_kernel()) return -1;
+    return tiku_posix_thread_memory(memory, bytes) == 0 ? 0 : -1;
+}
+
+void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused)
+{
+    tiku_posix_thread_use(mutexes, conds, refused);
 }
 
 int surface_os_in_desktop(void)

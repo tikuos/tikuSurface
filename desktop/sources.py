@@ -41,7 +41,6 @@ KIT_EXCLUDED = {
     'support/tiku_report.c': 'crash reports by signal; desktop/absent.c',
     'support/tiku_sys_linux.c': 'Linux system layer; desktop/sys.c',
     'support/tiku_watch.c': 'stall watchdog by signal; desktop/absent.c',
-    'support/tiku_work.c': 'job threads; tiku_work_inline.c',
 }
 KIT_EXCLUDED_MARKS = ('_linux', '_darwin', '_cocoa', '_coreaudio', '_x11')
 KITS = ('support', 'device', 'storage', 'interface', 'translation',
