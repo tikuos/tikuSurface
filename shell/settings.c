@@ -64,6 +64,48 @@ unsigned surface_settings_stored(int result)
     return result == 0 ? SURFACE_SETTINGS_SAVED : SURFACE_SETTINGS_FAILED;
 }
 
+/** @brief The raw position that an axis from @p lo to @p hi, @p last pixels
+ *  long, reports at pixel @p at; inverted axes count from the far end. */
+static long refit_raw(long lo, long hi, long last, long at, int inverted)
+{
+    long along = inverted ? last - at : at;
+    long span = (hi - lo) * along;
+
+    return lo + (span >= 0 ? span + last / 2 : span - last / 2) / last;
+}
+
+/** @brief Correct one screen axis's raw bounds from the positions reported
+ *  at its two edges.  Edges out of order leave the bounds out of order. */
+static void refit_axis(uint16_t *lo, uint16_t *hi, long last, int near, int far,
+    int inverted)
+{
+    long a = refit_raw(*lo, *hi, last, inverted ? far : near, inverted);
+    long b = refit_raw(*lo, *hi, last, inverted ? near : far, inverted);
+
+    a = a < 0 ? 0 : a > 65535 ? 65535 : a;
+    b = b < 0 ? 0 : b > 65535 ? 65535 : b;
+    *lo = (uint16_t)a;
+    *hi = (uint16_t)b;
+}
+
+int surface_touch_map_refit(const surface_touch_map_t *map, const int edge[4],
+    surface_touch_map_t *out)
+{
+    surface_touch_map_t m;
+
+    if (!map || !edge || !out || map->x_min >= map->x_max || map->y_min >= map->y_max ||
+        map->swap > 1 || map->invert_x > 1 || map->invert_y > 1) return 0;
+    m = *map;
+    /* With swap the screen's x comes from the controller's y bounds. */
+    refit_axis(m.swap ? &m.y_min : &m.x_min, m.swap ? &m.y_max : &m.x_max, 799,
+        edge[0], edge[1], m.invert_x);
+    refit_axis(m.swap ? &m.x_min : &m.y_min, m.swap ? &m.x_max : &m.y_max, 479,
+        edge[2], edge[3], m.invert_y);
+    if (m.x_min >= m.x_max || m.y_min >= m.y_max) return 0;
+    *out = m;
+    return 1;
+}
+
 int surface_preferences_valid(const surface_preferences_t *p)
 {return p&&p->background<6&&p->text<2&&p->html<3&&p->markdown<3;}
 int surface_preferences_encode(const surface_preferences_t *p,unsigned char out[SURFACE_SETTINGS_BYTES])

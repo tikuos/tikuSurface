@@ -45,6 +45,17 @@ unsigned surface_settings_load(int found, const unsigned char *record, unsigned 
 /** @brief The status a store write leaves: SURFACE_SETTINGS_SAVED for result 0,
  *  SURFACE_SETTINGS_FAILED for any other. */
 unsigned surface_settings_stored(int result);
+/**
+ * @brief The map that puts the screen's edges where @p map now reports @p edge.
+ * @param edge The positions @p map reports at the screen's left, right, top
+ * and bottom edges, in pixels of an 800 by 480 screen.
+ * @return 1 with the corrected map in @p out, its swap and inversions as in
+ * @p map; 0 with @p out unchanged when @p map is invalid, an axis's two edges
+ * are not in order or the result is no valid map. Bounds outside 0..65535
+ * are held to that range.
+ */
+int surface_touch_map_refit(const surface_touch_map_t *map, const int edge[4],
+    surface_touch_map_t *out);
 /** @brief Decode a checksummed record; errors leave the destination unchanged. */
 unsigned surface_settings_decode(const unsigned char *, unsigned length, surface_touch_map_t *);
 #endif

@@ -274,6 +274,80 @@ void surface_desktop_card(surface_media_io_t *io)
     while (!card_finished(NULL)) surface_os_desktop_wait(card_finished, NULL, 1000000u);
 }
 
+/** @brief Whether the kernel has answered the desktop's touch map request. */
+static int map_finished(void *context)
+{
+    (void)context;
+    return surface_desktop_bridge.map_done == surface_desktop_bridge.map_token;
+}
+
+/** @brief On the desktop thread: hand the kernel one touch map request and
+ *  wait for its answer. */
+static int map_request(int kind, const int *edge)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+
+    b->map_kind = kind;
+    if (edge != NULL) memcpy(b->map_edge, edge, sizeof b->map_edge);
+    b->map_token++;
+    surface_os_desktop_kick();
+    while (!map_finished(NULL)) surface_os_desktop_wait(map_finished, NULL, 1000000u);
+    return b->map_result;
+}
+
+/* The shell's pointer map (TIKU_SHELL_TOUCH), which its calibration page
+ * corrects. */
+int tiku_shell_touch_fit(int x0, int x1, int y0, int y1)
+{
+    int edge[4] = { x0, x1, y0, y1 };
+
+    return map_request(SURFACE_MAP_FIT, edge);
+}
+
+int tiku_shell_touch_keep(void) { return map_request(SURFACE_MAP_KEEP, NULL); }
+
+void tiku_shell_touch_revert(void) { (void)map_request(SURFACE_MAP_REVERT, NULL); }
+
+/** @brief Answer the desktop's touch map request, if one waits: a fit
+ *  corrects the map in force and stores nothing, keep stores it, and revert
+ *  reads the stored map again, or takes the panel's default without one. */
+static int map_step(void)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+    unsigned token = b->map_token;
+    surface_touch_map_t next;
+
+    if (b->map_done == token) return 0;
+    switch (b->map_kind) {
+    case SURFACE_MAP_FIT:
+        if (surface_touch_map_refit(&rt.map, b->map_edge, &next)) {
+            rt.map = next;
+            rt.map_status = SURFACE_SETTINGS_PENDING;
+            b->map_result = 0;
+        } else {
+            b->map_result = -1;
+        }
+        break;
+    case SURFACE_MAP_KEEP:
+        b->map_result = surface_runtime_calibrate(&rt.map) &&
+                        rt.map_status == SURFACE_SETTINGS_SAVED ? 0 : -1;
+        break;
+    default: {
+        unsigned char record[SURFACE_SETTINGS_BYTES];
+        size_t length = 0;
+
+        rt.map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
+        rt.map_status = surface_settings_load(
+            surface_os_settings_read(record, sizeof record, &length), record, (unsigned)length,
+            &rt.map);
+        b->map_result = 0;
+        break;
+    }
+    }
+    b->map_done = token;
+    return 1;
+}
+
 /** @brief Whether the log ring has room for another byte. */
 static int log_room(void *context)
 {
@@ -903,6 +977,7 @@ int surface_runtime_poll(void)
             break;
         }
     }
+    if (map_step()) woke = 1;
     while (card_pending() && surface_os_time() - begin < PRESENT_TURN_US + CARD_TURN_US) {
         if (card_step()) {
             woke = 1;

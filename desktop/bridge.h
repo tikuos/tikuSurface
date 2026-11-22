@@ -42,7 +42,21 @@ typedef struct {
     volatile int card_mounted;                  /* the kernel mounted it */
     char hash_path[64];                          /* a file to hash, or "" */
     volatile unsigned hash_token, hash_done;
+    /* One touch map request at a time: the desktop sets map_kind, and for
+     * a fit map_edge, and bumps map_token; the kernel answers in map_result
+     * and sets map_done to that token. */
+    volatile int map_kind;                      /* SURFACE_MAP_* */
+    int map_edge[4];                            /* left, right, top, bottom */
+    volatile int map_result;                    /* 0, or -1 when refused */
+    volatile unsigned map_token, map_done;
 } surface_desktop_bridge_t;
+
+/** @brief What the desktop asks of the touch map. */
+enum {
+    SURFACE_MAP_FIT = 1,    /* correct it from the edges it now reports */
+    SURFACE_MAP_KEEP,       /* store the map in force */
+    SURFACE_MAP_REVERT      /* put the stored map back in force */
+};
 
 /** @brief The one bridge, owned by desktop/runtime.c. */
 extern surface_desktop_bridge_t surface_desktop_bridge;

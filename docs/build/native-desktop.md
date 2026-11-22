@@ -59,6 +59,14 @@ landed until the finger travels 10 pixels, and a press within 24 pixels of a
 tap and 400 ms after it lands on that tap, so the desktop sees a double click
 (`desktop/gesture.h`). `SURFACE_TOUCH_MODE=0` posts the raw contacts.
 
+Touch mode also turns on the shell's touch behaviour (`TIKU_SHELL_TOUCH`):
+the 16 px face, the lens for small controls and menus, and the calibration
+page in the Tiku menu. The page reaches the touch map through
+`tiku_shell_touch_fit()`, `tiku_shell_touch_keep()` and
+`tiku_shell_touch_revert()` in `desktop/runtime.c`: a fit corrects the map in
+force from the edges the page measured and stores nothing, keep writes the
+calibration record, and revert reads it back.
+
 ## Diagnostics
 
 `/surface/control` accepts these commands from the owner context:

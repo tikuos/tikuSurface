@@ -53,6 +53,33 @@ int main(void)
     assert(!memcmp(&loaded,&map,sizeof map));
     assert(surface_settings_stored(0)==SURFACE_SETTINGS_SAVED);
     assert(surface_settings_stored(-1)==SURFACE_SETTINGS_FAILED);
+    /* A calibration page hands back the positions the map reports at the
+     * screen's edges.  On the default map they are the new bounds; on a
+     * map already right they change nothing. */
+    surface_touch_map_t plain = {0,799,0,479,0,0,0}, refit = kept;
+    assert(surface_touch_map_refit(&plain,(int[4]){17,797,17,480},&refit));
+    assert(refit.x_min==17 && refit.x_max==797 && refit.y_min==17 && refit.y_max==480 &&
+        !refit.swap && !refit.invert_x && !refit.invert_y);
+    plain = refit;
+    assert(surface_touch_map_refit(&plain,(int[4]){0,799,0,479},&refit));
+    assert(!memcmp(&refit,&plain,sizeof plain));
+    /* A controller twice the screen's size: the edges scale with it, an
+     * inverted axis is corrected from its far end, and a swapped map takes
+     * the screen's x from the controller's y. */
+    plain = (surface_touch_map_t){0,1598,0,958,0,0,0};
+    assert(surface_touch_map_refit(&plain,(int[4]){10,789,5,474},&refit));
+    assert(refit.x_min==20 && refit.x_max==1578 && refit.y_min==10 && refit.y_max==948);
+    plain.invert_x = 1;
+    assert(surface_touch_map_refit(&plain,(int[4]){10,789,0,479},&refit));
+    assert(refit.x_min==20 && refit.x_max==1578 && refit.invert_x==1);
+    plain = (surface_touch_map_t){0,479,0,799,1,0,0};
+    assert(surface_touch_map_refit(&plain,(int[4]){17,797,0,479},&refit));
+    assert(refit.y_min==17 && refit.y_max==797 && refit.x_min==0 && refit.x_max==479 && refit.swap==1);
+    /* Edges out of order are no calibration, and the map is left alone. */
+    refit = kept;
+    assert(!surface_touch_map_refit(&plain,(int[4]){400,400,0,479},&refit));
+    assert(!surface_touch_map_refit(&plain,(int[4]){0,799,300,200},&refit));
+    assert(!memcmp(&refit,&kept,sizeof kept));
     surface_host_t host; surface_config_t config=surface_host_config(&host);
     config.settings=(surface_settings_provider_t){NULL,read_settings,save_settings};
     surface_t *shell=surface_create(&config); assert(shell);

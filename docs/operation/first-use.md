@@ -145,7 +145,12 @@ to observe raw contacts and the seven-field format documented in the
 [runtime binding](../../platform/tikuos/README.md#console-diagnostics).
 `x` and `y` retain the last nonempty report; `contacts=0` is not a new contact
 sample. Raw bounds describe controller axes before swap and inversion. Collect
-measured bounds and orientation before writing a custom map. There is no
-on-panel measured-bound calibration wizard in this build. On the native
-desktop `target=X,Y` on `/surface/control` shows a ring to aim a finger at,
-and `/surface/touchlog` gives the point each tap landed on.
+measured bounds and orientation before writing a custom map.
+
+On the native desktop the Tiku menu's "Calibrate Touch..." does this on the
+panel: it asks for a tap on each of nine crosses, fits the map from the taps
+and puts it in force. A tap on its Keep box within ten seconds stores the
+map; without one the stored map comes back, so a calibration that makes the
+panel hard to use undoes itself. Taps that fit no map change nothing. From
+the console, `target=X,Y` on `/surface/control` shows a ring to aim a finger
+at, and `/surface/touchlog` gives the point each tap landed on.
