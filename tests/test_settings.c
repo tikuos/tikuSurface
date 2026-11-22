@@ -38,6 +38,21 @@ int main(void)
         assert(surface_settings_decode(bytes,i,&decoded)==SURFACE_SETTINGS_CORRUPT);
     }
     assert(!surface_settings_encode(&(surface_touch_map_t){0},bytes));
+    /* The store answers 0 for a record, 1 for none and -1 for an error, on
+     * reads and on writes: a record read is decoded, and only then does the
+     * map change. */
+    surface_touch_map_t kept = {1,2,3,4,0,0,0}, loaded = kept;
+    assert(surface_settings_encode(&map, bytes));
+    assert(surface_settings_load(1,bytes,sizeof bytes,&loaded)==SURFACE_SETTINGS_DEFAULT);
+    assert(surface_settings_load(-1,bytes,sizeof bytes,&loaded)==SURFACE_SETTINGS_UNAVAILABLE);
+    assert(!memcmp(&loaded,&kept,sizeof kept));
+    memcpy(copy,bytes,sizeof bytes); copy[10]^=1;
+    assert(surface_settings_load(0,copy,sizeof copy,&loaded)==SURFACE_SETTINGS_CORRUPT);
+    assert(!memcmp(&loaded,&kept,sizeof kept));
+    assert(surface_settings_load(0,bytes,sizeof bytes,&loaded)==SURFACE_SETTINGS_SAVED);
+    assert(!memcmp(&loaded,&map,sizeof map));
+    assert(surface_settings_stored(0)==SURFACE_SETTINGS_SAVED);
+    assert(surface_settings_stored(-1)==SURFACE_SETTINGS_FAILED);
     surface_host_t host; surface_config_t config=surface_host_config(&host);
     config.settings=(surface_settings_provider_t){NULL,read_settings,save_settings};
     surface_t *shell=surface_create(&config); assert(shell);

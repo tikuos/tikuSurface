@@ -746,11 +746,9 @@ int surface_runtime_start(void)
         surface_os_desktop_print(line, sizeof line - 1u);
     }
     rt.map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
-    rt.map_status = SURFACE_SETTINGS_DEFAULT;
-    if (surface_os_settings_read(record, sizeof record, &length) &&
-        surface_settings_decode(record, (unsigned)length, &rt.map) == SURFACE_SETTINGS_SAVED) {
-        rt.map_status = SURFACE_SETTINGS_SAVED;
-    }
+    rt.map_status = surface_settings_load(
+        surface_os_settings_read(record, sizeof record, &length), record, (unsigned)length,
+        &rt.map);
     if (!surface_os_display_open(rt.rgb[0], rt.rgb[1]) ||
         !surface_presentation_init(&rt.presentation, rt.rgb[0], RGB_BYTES, rt.rgb[1],
                                    RGB_BYTES, 0, 4096, &rt.sequence, &scanout, NULL)) {
@@ -953,13 +951,9 @@ int surface_runtime_calibrate(const surface_touch_map_t *map)
 
     if (!rt.running || !surface_touch_map_valid(map)) return 0;
     rt.map = *map;
-    rt.map_status = SURFACE_SETTINGS_PENDING;
-    if (surface_settings_encode(map, record) &&
-        surface_os_settings_write(record, sizeof record)) {
-        rt.map_status = SURFACE_SETTINGS_SAVED;
-    } else {
-        rt.map_status = SURFACE_SETTINGS_FAILED;
-    }
+    rt.map_status = surface_settings_encode(map, record)
+        ? surface_settings_stored(surface_os_settings_write(record, sizeof record))
+        : SURFACE_SETTINGS_FAILED;
     return 1;
 }
 

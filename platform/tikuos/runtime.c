@@ -340,8 +340,7 @@ int surface_runtime_start(void)
     state->saved_map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
     unsigned char record[SURFACE_SETTINGS_BYTES]; size_t length = 0;
     int loaded = surface_os_settings_read(record, sizeof record, &length);
-    state->settings_status = loaded == 1 ? SURFACE_SETTINGS_DEFAULT : loaded ? SURFACE_SETTINGS_UNAVAILABLE :
-        surface_settings_decode(record, (unsigned)length, &state->saved_map);
+    state->settings_status = surface_settings_load(loaded, record, (unsigned)length, &state->saved_map);
     config.settings = (surface_settings_provider_t){state, settings_read, settings_save};
 #if SURFACE_PREFERENCES
     length=0;loaded=surface_os_preferences_read(record,sizeof record,&length);

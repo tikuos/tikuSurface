@@ -51,6 +51,19 @@ unsigned surface_settings_decode(const unsigned char *data, unsigned n, surface_
     return SURFACE_SETTINGS_SAVED;
 }
 
+unsigned surface_settings_load(int found, const unsigned char *record, unsigned length,
+    surface_touch_map_t *map)
+{
+    if (found == 1) return SURFACE_SETTINGS_DEFAULT;
+    if (found != 0) return SURFACE_SETTINGS_UNAVAILABLE;
+    return surface_settings_decode(record, length, map);
+}
+
+unsigned surface_settings_stored(int result)
+{
+    return result == 0 ? SURFACE_SETTINGS_SAVED : SURFACE_SETTINGS_FAILED;
+}
+
 int surface_preferences_valid(const surface_preferences_t *p)
 {return p&&p->background<6&&p->text<2&&p->html<3&&p->markdown<3;}
 int surface_preferences_encode(const surface_preferences_t *p,unsigned char out[SURFACE_SETTINGS_BYTES])
