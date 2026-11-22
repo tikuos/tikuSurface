@@ -74,3 +74,4 @@ tap and 400 ms after it lands on that tap, so the desktop sees a double click
 | `down=X,Y` `move=X,Y` `up=X,Y` `tap=X,Y` `dtap=X,Y` | queue pointer events as touch posts them |
 | `drag=X0,Y0,X1,Y1` | queue a press, eight moves along the line and a release |
 | `finger=X,Y` `lift` | place a finger at a panel point, or lift it, through the touch path: mark, slop and tap landing |
+| `target=X,Y` | show the touch mark alone at a panel point, as a point to aim a finger at; a finger moves it and its lift removes it |

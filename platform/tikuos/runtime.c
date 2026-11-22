@@ -425,6 +425,12 @@ int surface_runtime_input_stats(surface_input_stats_t *out)
 #endif
 }
 
+int surface_runtime_touch_log(char *buffer, size_t capacity)
+{
+    (void)buffer; (void)capacity;
+    return 0;
+}
+
 int surface_runtime_calibration(surface_touch_map_t *map, unsigned *status)
 {
 #if SURFACE_LCD_ENABLE

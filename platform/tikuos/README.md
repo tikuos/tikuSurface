@@ -59,7 +59,8 @@ require `TIKU_VFS_CAP_SYS`; the UART shell supplies that capability.
 | --- | --- |
 | `/surface/status` | Read runtime counters, foreground app ID and unavailable-media flag |
 | `/surface/display` | Read LCD selection, completed handoffs and display failures |
-| `/surface/touch` | Read report/error counts, current contact count and the last nonempty report's first raw contact |
+| `/surface/touch` | Read report/error counts, current contact count and the last nonempty report's first raw contact; on the native desktop also the presses and releases the touch path posted, the presses that came within 60 ms of a release, and the shortest time from a release to the next press |
+| `/surface/touchlog` | Read the native desktop's last 80 touch events, oldest first: `d` press, `m` moves (last position and count), `u` release, `r` the contact a press was moved from, `x` a release for want of reports; then the position and the milliseconds since the line before |
 | `/surface/calibration` | Read active mapping/status; write `x_min,x_max,y_min,y_max,swap,invert_x,invert_y` |
 | `/surface/psram_free` | Read unreserved bytes in the primary PSRAM span |
 | `/surface/control` | Write `start`, `stop`, `launch=0..3` or `fail=0..32` |

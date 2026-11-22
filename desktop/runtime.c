@@ -371,6 +371,53 @@ static void post(tiku_event_type_t type, int x, int y, uint64_t now)
 static void release(uint64_t now);
 static int contact(int x, int y, unsigned id, uint64_t now);
 
+/* The touch path's last pointer events, for /surface/touchlog. */
+#define TOUCH_LOG 80u
+#define TOUCH_QUICK_US 60000u   /* a press this soon after a release is no second touch */
+typedef struct { char kind; uint16_t x, y, moves; uint32_t ms; } touch_log_t;
+static touch_log_t touch_log[TOUCH_LOG];
+static unsigned touch_log_head;
+static uint64_t touch_lift_at;  /* when the touch path last released, 0 before */
+
+/** @brief Keep one event of the touch path; moves in a row share a line. */
+static void touch_note(char kind, int x, int y, uint64_t now)
+{
+    touch_log_t *last = touch_log_head ? &touch_log[(touch_log_head - 1u) % TOUCH_LOG] : NULL;
+
+    if (kind == 'm' && last != NULL && last->kind == 'm') {
+        last->x = (uint16_t)x;
+        last->y = (uint16_t)y;
+        last->ms = (uint32_t)(now / 1000u);
+        if (last->moves < UINT16_MAX) last->moves++;
+        return;
+    }
+    touch_log[touch_log_head % TOUCH_LOG] =
+        (touch_log_t){ kind, (uint16_t)x, (uint16_t)y, 1u, (uint32_t)(now / 1000u) };
+    touch_log_head++;
+}
+
+int surface_runtime_touch_log(char *buffer, size_t capacity)
+{
+    unsigned count = touch_log_head < TOUCH_LOG ? touch_log_head : TOUCH_LOG;
+    unsigned first = touch_log_head - count;
+    uint32_t before = 0;
+    size_t used = 0;
+
+    if (buffer == NULL || capacity == 0u) return 0;
+    buffer[0] = 0;
+    for (unsigned i = first; i != touch_log_head; i++) {
+        const touch_log_t *e = &touch_log[i % TOUCH_LOG];
+        int n = snprintf(buffer + used, capacity - used, "%c %u,%u +%lu n=%u\n", e->kind,
+                         (unsigned)e->x, (unsigned)e->y,
+                         (unsigned long)(i == first ? 0u : e->ms - before), (unsigned)e->moves);
+
+        if (n < 0 || (size_t)n >= capacity - used) break;
+        used += (size_t)n;
+        before = e->ms;
+    }
+    return (int)used;
+}
+
 int surface_runtime_inject(char kind, unsigned x, unsigned y)
 {
     uint64_t now = surface_os_time();
@@ -398,6 +445,12 @@ int surface_runtime_inject(char kind, unsigned x, unsigned y)
         if (rt.touch_active) release(now);
         rt.touch_held = 0;
         break;
+#if SURFACE_TOUCH_MODE
+    case 'k':
+        /* The mark with no finger: it stays until a finger moves it. */
+        surface_presentation_mark(&rt.presentation, 1, (int)x, (int)y);
+        break;
+#endif
     default: return 0;
     }
     surface_os_desktop_wake();
@@ -447,6 +500,9 @@ static void release(uint64_t now)
     surface_presentation_mark(&rt.presentation, 0, 0, 0);
 #endif
     post(TIKU_EVENT_POINTER_UP, x, y, now);
+    touch_note('u', x, y, now);
+    rt.input.ups++;
+    touch_lift_at = now ? now : 1u;
     rt.touch_active = 0;
 }
 
@@ -509,6 +565,17 @@ static int contact(int x, int y, unsigned id, uint64_t now)
     rt.touch_x = px;
     rt.touch_y = py;
     if (event == SURFACE_GESTURE_NONE) return 0;
+    if (event == SURFACE_GESTURE_DOWN) {
+        if (px != x || py != y) touch_note('r', x, y, now);
+        rt.input.downs++;
+        if (touch_lift_at != 0u) {
+            uint32_t gap = (uint32_t)((now - touch_lift_at) / 1000u);
+
+            if (now - touch_lift_at < TOUCH_QUICK_US) rt.input.quick++;
+            if (rt.input.gap_ms == 0u || gap < rt.input.gap_ms) rt.input.gap_ms = gap ? gap : 1u;
+        }
+    }
+    touch_note(event == SURFACE_GESTURE_DOWN ? 'd' : 'm', px, py, now);
     post(event == SURFACE_GESTURE_DOWN ? TIKU_EVENT_POINTER_DOWN : TIKU_EVENT_POINTER_MOVE,
          px, py, now);
     return 1;
@@ -801,6 +868,7 @@ int surface_runtime_poll(void)
         default: rt.input.errors++; break;
         }
         if (rt.touch_active && !rt.touch_held && begin - rt.last_report >= TOUCH_EXPIRE_US) {
+            touch_note('x', rt.touch_x, rt.touch_y, begin);
             release(begin);
             woke = 1;
         }

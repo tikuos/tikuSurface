@@ -146,4 +146,6 @@ to observe raw contacts and the seven-field format documented in the
 `x` and `y` retain the last nonempty report; `contacts=0` is not a new contact
 sample. Raw bounds describe controller axes before swap and inversion. Collect
 measured bounds and orientation before writing a custom map. There is no
-on-panel measured-bound calibration wizard in this build.
+on-panel measured-bound calibration wizard in this build. On the native
+desktop `target=X,Y` on `/surface/control` shows a ring to aim a finger at,
+and `/surface/touchlog` gives the point each tap landed on.

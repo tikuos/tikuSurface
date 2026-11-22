@@ -83,9 +83,18 @@ static int input_read(char *buffer, size_t capacity)
     surface_input_stats_t s;
     if (!surface_os_in_owner()) return TIKU_VFS_EACCES;
     if (!surface_runtime_input_stats(&s)) return TIKU_VFS_EIO;
-    return snprintf(buffer, capacity, "reports=%lu errors=%lu contacts=%lu id=%lu x=%lu y=%lu\n",
+    return snprintf(buffer, capacity, "reports=%lu errors=%lu contacts=%lu id=%lu x=%lu y=%lu"
+        " downs=%lu ups=%lu quick=%lu gap_ms=%lu\n",
         (unsigned long)s.reports, (unsigned long)s.errors, (unsigned long)s.contacts,
-        (unsigned long)s.id, (unsigned long)s.x, (unsigned long)s.y);
+        (unsigned long)s.id, (unsigned long)s.x, (unsigned long)s.y,
+        (unsigned long)s.downs, (unsigned long)s.ups, (unsigned long)s.quick,
+        (unsigned long)s.gap_ms);
+}
+/** @brief Copy the touch path's last pointer events without polling the controller. */
+static int touchlog_read(char *buffer, size_t capacity)
+{
+    if (!surface_os_in_owner()) return TIKU_VFS_EACCES;
+    return surface_runtime_touch_log(buffer, capacity);
 }
 /** @brief Copy active calibration and its persistence state without storage I/O. */
 static int calibration_read(char *buffer, size_t capacity)
@@ -163,6 +172,9 @@ static int control_write(const char *text, size_t length)
                 return surface_runtime_inject(text[0], x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
             if (key == 4 && !memcmp(text, "dtap", 4))
                 return surface_runtime_inject('D', x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
+            /* target=X,Y: the touch mark alone, as a point to aim a finger at. */
+            if (key == 6 && !memcmp(text, "target", 6))
+                return surface_runtime_inject('k', x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
             if (key == 6 && !memcmp(text, "finger", 6))
                 return surface_runtime_inject('f', x, y) ? TIKU_VFS_OK : TIKU_VFS_EINVAL;
         }
@@ -194,6 +206,7 @@ static const tiku_vfs_node_t children[] = {
     {.name = "status", .type = TIKU_VFS_FILE, .read = status_read},
     {.name = "psram_free", .type = TIKU_VFS_FILE, .read = free_read},
     {.name = "touch", .type = TIKU_VFS_FILE, .read = input_read},
+    {.name = "touchlog", .type = TIKU_VFS_FILE, .read = touchlog_read},
     {.name = "calibration", .type = TIKU_VFS_FILE, .read = calibration_read, .write = calibration_write, .req_cap = TIKU_VFS_CAP_SYS},
     {.name = "display", .type = TIKU_VFS_FILE, .read = display_read},
     {.name = "timing", .type = TIKU_VFS_FILE, .read = timing_read},

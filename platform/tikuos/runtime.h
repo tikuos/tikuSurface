@@ -15,10 +15,25 @@
 #ifndef SURFACE_CONNECTED_ENABLE
 #define SURFACE_CONNECTED_ENABLE 0
 #endif
-/** @brief Input counters and the first raw contact from the most recent nonempty report. */
-typedef struct { uint32_t reports, errors, contacts, id, x, y; } surface_input_stats_t;
+/**
+ * @brief Input counters and the first raw contact from the most recent nonempty report.
+ * @note downs and ups count the presses and releases the touch path posted,
+ * quick the presses that came within 60 ms of a release, and gap_ms the
+ * shortest time from a release to the next press (0 before the second press).
+ */
+typedef struct {
+    uint32_t reports, errors, contacts, id, x, y, downs, ups, quick, gap_ms;
+} surface_input_stats_t;
 /** @brief Copy input observations without bus access; zero means no LCD runtime. */
 int surface_runtime_input_stats(surface_input_stats_t *);
+/**
+ * @brief Write the touch path's last pointer events as text, oldest first.
+ * @note One line an event: d press, m moves (the last position and their
+ * count), u release, r the contact a press was moved from, x a release for
+ * want of reports; then the position and the milliseconds since the line
+ * before. Returns the text's length, 0 without a desktop runtime.
+ */
+int surface_runtime_touch_log(char *buffer, size_t capacity);
 /** @brief Reserved UI PSRAM, including pixels, app allowance and pool metadata. */
 #ifndef SURFACE_DESKTOP
 #define SURFACE_DESKTOP 0
