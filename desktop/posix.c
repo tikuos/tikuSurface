@@ -20,6 +20,7 @@
 #include <pthread.h>
 #include <reent.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -77,9 +78,81 @@ int tiku_posix_mutations(uint64_t *count)
     return 0;
 }
 
+/* Each change also records the directory whose listing it changes: the
+ * changed node's parent, or the root for the root.  A reader keeps its own
+ * place in this ring (tiku_posix_changes()), so a view re-lists only when
+ * its own folder, or one above it, changed. */
+#define CHANGE_RING 64u
+static uint64_t change_dirs[CHANGE_RING];
+static uint64_t change_total;
+
+static void change_in(const rnode_t *n)
+{
+    const rnode_t *dir = n->parent != NULL ? n->parent : n;
+
+    change_dirs[change_total % CHANGE_RING] = dir->ino;
+    change_total++;
+}
+
+static void enter(void);
+static void leave(void);
+
+int tiku_posix_changes(uint64_t *next, uint64_t *dirs, int max, int *complete)
+{
+    int n = 0;
+
+    enter();
+    *complete = 1;
+    if (*next == UINT64_MAX) {
+        *next = change_total;
+    } else if (change_total - *next > CHANGE_RING) {
+        *next = change_total - CHANGE_RING;
+        *complete = 0;
+    }
+    while (*next < change_total && n < max) dirs[n++] = change_dirs[(*next)++ % CHANGE_RING];
+    leave();
+    return n;
+}
+
+/** @brief Write into @p out the path of @p n below @p at, whose path is
+ *  @p out's first @p len bytes.  @return 0 when found below @p at */
+static int path_below(const rnode_t *at, uint64_t ino, char *out, size_t max, size_t len)
+{
+    for (const rnode_t *c = at->child; c != NULL; c = c->next) {
+        size_t k = strlen(c->name);
+
+        if (len + 1u + k >= max) continue;
+        out[len] = '/';
+        memcpy(out + len + 1u, c->name, k + 1u);
+        if (c->ino == ino || (S_ISDIR(c->mode) && path_below(c, ino, out, max, len + 1u + k) == 0)) {
+            return 0;
+        }
+    }
+    out[len] = '\0';
+    return -1;
+}
+
+int tiku_posix_path_of(uint64_t ino, char *out, size_t max)
+{
+    int r = -1;
+
+    if (out == NULL || max < 2u) return -1;
+    enter();
+    if (root != NULL && root->ino == ino) {
+        snprintf(out, max, "/");
+        r = 0;
+    } else if (root != NULL) {
+        out[0] = '\0';
+        r = path_below(root, ino, out, max, 0u);
+    }
+    leave();
+    return r;
+}
+
 /** @brief Count one change to @p n. */
 static void changed(rnode_t *n)
 {
+    change_in(n);
     mutations++;
     if (n->counted != window) {
         n->counted = window;
@@ -92,6 +165,7 @@ static void changed(rnode_t *n)
  *  created in this window. */
 static void removed(rnode_t *n)
 {
+    change_in(n);
     if (n->born == window && n->counted == window) mutations -= n->changes;
     else mutations++;
 }
@@ -254,12 +328,12 @@ static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
 
     if (n == NULL) return NULL;
     n->born = window;
-    changed(n);
     snprintf(n->name, sizeof n->name, "%s", name);
     n->mode = mode;
     n->ino = next_ino++;
     n->mtime = wall();
     n->parent = parent;
+    changed(n);
     if (parent != NULL) {
         n->next = parent->child;
         parent->child = n;
@@ -1766,6 +1840,7 @@ static int _rename_locked(const char *old, const char *new)
         if (to->opened) to->unlinked = 1;
         else node_free(to);
     }
+    change_in(from);              /* the directory it leaves */
     node_detach(from);
     memcpy(from->name, leaf, len);
     from->name[len] = '\0';
@@ -1773,6 +1848,7 @@ static int _rename_locked(const char *old, const char *new)
     from->next = parent->child;
     parent->child = from;
     parent->mtime = wall();
+    change_in(from);              /* and the one it enters */
     mutations++;
     return 0;
 }

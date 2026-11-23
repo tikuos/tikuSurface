@@ -28,6 +28,8 @@ int _rename(const char *old, const char *new);
 ssize_t _read(int fd, void *buf, size_t n);
 ssize_t _write(int fd, const void *buf, size_t n);
 int tiku_posix_mutations(uint64_t *count);
+int tiku_posix_changes(uint64_t *next, uint64_t *dirs, int max, int *complete);
+int tiku_posix_path_of(uint64_t ino, char *out, size_t max);
 off_t _lseek(int fd, off_t offset, int whence);
 int _fstat(int fd, struct stat *st);
 int _stat(const char *path, struct stat *st);
@@ -268,6 +270,65 @@ static int fake_has(const char *name, const char *text)
     return 0;
 }
 
+/** @brief The paths of the directories recorded since @p next, joined by
+ *  spaces into @p out; the records' count. */
+static int changes_since(uint64_t *next, char *out, size_t max, int *complete)
+{
+    uint64_t dirs[8];
+    char path[PATH_MAX];
+    int n = tiku_posix_changes(next, dirs, 8, complete);
+
+    out[0] = '\0';
+    for (int i = 0; i < n; i++) {
+        if (tiku_posix_path_of(dirs[i], path, sizeof path) != 0) snprintf(path, sizeof path, "?");
+        snprintf(out + strlen(out), max - strlen(out), "%s%s", i ? " " : "", path);
+    }
+    return n;
+}
+
+/** @brief Each change records the directory whose listing it changes, read
+ *  from a place of the reader's own; a lost record makes the answer
+ *  partial, and an id gives its directory's path. */
+static void test_changes(void)
+{
+    uint64_t next = UINT64_MAX, other;
+    struct stat st;
+    char text[256], path[PATH_MAX];
+    int complete, fd;
+
+    assert(tiku_posix_changes(&next, NULL, 0, &complete) == 0 && complete && next != UINT64_MAX);
+    other = next;
+    touch("/tmp/chg-a");
+    assert(changes_since(&next, text, sizeof text, &complete) >= 1 && complete &&
+           strstr(text, "/tmp") == text && strstr(text, "?") == NULL);
+    assert(changes_since(&next, text, sizeof text, &complete) == 0 && complete);
+    fd = _open("/tmp/chg-a", O_WRONLY | O_TRUNC, 0);
+    assert(fd >= 0 && _write(fd, "1", 1) == 1 && _write(fd, "2", 1) == 1 && _close(fd) == 0);
+    assert(changes_since(&next, text, sizeof text, &complete) == 2 && !strcmp(text, "/tmp /tmp"));
+    assert(mkdir("/tmp/chg-d", 0755) == 0);
+    touch("/tmp/chg-d/f");
+    assert(changes_since(&next, text, sizeof text, &complete) == 2 &&
+           !strcmp(text, "/tmp /tmp/chg-d"));
+    assert(_rename("/tmp/chg-d/f", "/tmp/chg-g") == 0);
+    assert(changes_since(&next, text, sizeof text, &complete) == 2 &&
+           !strcmp(text, "/tmp/chg-d /tmp"));
+    assert(_unlink("/tmp/chg-g") == 0 && chmod("/tmp/chg-d", 0700) == 0 && rmdir("/tmp/chg-d") == 0);
+    assert(changes_since(&next, text, sizeof text, &complete) == 3 && !strcmp(text, "/tmp /tmp /tmp"));
+    /* A second reader has its own place: everything since it began. */
+    assert(changes_since(&other, text, sizeof text, &complete) == 8 && complete);
+    /* The root's records name it; an id no node carries has no path. */
+    assert(tiku_posix_path_of(1u << 30, path, sizeof path) == -1);
+    assert(_stat("/", &st) == 0 && tiku_posix_path_of((uint64_t)st.st_ino, path, sizeof path) == 0 &&
+           !strcmp(path, "/"));
+    /* A reader more than the ring behind is told its answer is partial. */
+    for (int i = 0; i < 70; i++) {
+        assert(chmod("/tmp/chg-a", (i & 1) ? 0600 : 0644) == 0);
+    }
+    assert(tiku_posix_changes(&next, (uint64_t[8]){0}, 8, &complete) == 8 && !complete);
+    assert(tiku_posix_changes(&next, (uint64_t[64]){0}, 64, &complete) == 56 && complete);
+    assert(_unlink("/tmp/chg-a") == 0);
+}
+
 /** @brief Remove every attribute of @p path, as a new tree starts without. */
 static void forget_attributes(const char *path)
 {
@@ -485,9 +546,11 @@ int main(void)
 
     test_settings_store();
     test_attributes();
+    test_changes();
     puts("posix layer: the home's note is seeded; directory streams outlive the "
          "entries they reach; files have no date while the clock is unset; "
          "the kernel's namespace is not in the tree; the settings files are the store's; "
-         "the start-up folders' attributes are kept in the store");
+         "the start-up folders' attributes are kept in the store; changes name their "
+         "directories");
     return 0;
 }

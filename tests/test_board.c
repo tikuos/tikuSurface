@@ -311,20 +311,26 @@ int main(void)
            strstr(err, "authority") && !strcmp(values[1].value, "desk"));
     refuse_authority = 0;
 
-    /* Changes: a value in place, the store's folder as a change under it,
-     * and a created node reloading the manifest. */
+    /* Changes, each under the folder it touches: a value's folder, a
+     * folder itself, and the root for a node the manifest does not name;
+     * a created node reloads the manifest. */
     complete = -1;
     assert(b->ops->changes(b, ch, 4, &complete) == 0 && complete == 1);
     record("changed\t00000011\t1");
     record("changed\t00000020\t2");
-    assert(b->ops->changes(b, ch, 4, &complete) == 2 && complete == 1);
-    assert(ch[0].op == TIKU_CH_CHANGED && ch[0].id == 0x11u);
+    record("changed\t00000013\t3");
+    assert(b->ops->changes(b, ch, 4, &complete) == 3 && complete == 1);
+    assert(ch[0].op == TIKU_CH_SUBTREE && ch[0].id == 0x10u);
     assert(ch[1].op == TIKU_CH_SUBTREE && ch[1].id == 0x20u);
+    assert(ch[2].op == TIKU_CH_SUBTREE && ch[2].id == 0x12u);
+    assert(b->ops->stat(b, "/", &m) == 0 && b->ops->path_of_id(b, m.node_id, buf, sizeof buf) == 0 &&
+           !strcmp(buf, "/"));
     assert(b->ops->path_of_id(b, 0x13u, buf, sizeof buf) == 0 && !strcmp(buf, "/sys/device/name"));
     assert(b->ops->path_of_id(b, 0x99u, buf, sizeof buf) == -1);
     strcat(manifest, "\n/sys/new\tf\tr-\t-\t-\t00000016\n");
     record("created\t00000016\t3");
-    assert(b->ops->changes(b, ch, 4, &complete) == 1 && ch[0].op == TIKU_CH_CREATED);
+    assert(b->ops->changes(b, ch, 4, &complete) == 1 && ch[0].op == TIKU_CH_SUBTREE &&
+           b->ops->path_of_id(b, ch[0].id, buf, sizeof buf) == 0 && !strcmp(buf, "/"));
     assert(b->ops->stat(b, "/sys/new", &m) == 0 && m.node_id == 0x16u);
 
     /* More records than room, or records the reader lost, are partial. */

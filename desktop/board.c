@@ -27,6 +27,7 @@
 #define BOARD_PATH_MAX 64u        /* the kernel's TIKU_VFS_PATH_MAX */
 #define BOARD_VALUE_MAX 512u      /* a value one read or write carries */
 #define BOARD_STORE "/data"
+#define BOARD_ROOT_ID 1u          /* the device root's id; no node's address */
 
 typedef struct {
     char path[BOARD_PATH_MAX];
@@ -267,6 +268,7 @@ static int bd_stat(tiku_backend_t *be, const char *path, tiku_model_t *out)
         snprintf(out->facts.meta, sizeof out->facts.meta, "-");
         out->facts.cap_known = 1;
         snprintf(out->type, sizeof out->type, "tiku-dir/device");
+        out->node_id = BOARD_ROOT_ID;
         return 0;
     }
     pthread_mutex_lock(&b->lock);
@@ -422,9 +424,31 @@ static int bd_pump(tiku_backend_t *be, int timeout_ms)
     return 0;
 }
 
+/** @brief The folder a record for node @p id changes: a folder's own id, a
+ *  file's folder's, and the root's for a node the manifest does not name. */
+static uint64_t folder_of(const board_t *b, uint32_t id)
+{
+    char parent[BOARD_PATH_MAX];
+    const board_node_t *node = NULL, *dir;
+    char *slash;
+
+    for (int i = 0; i < b->count && node == NULL; i++) {
+        if (b->nodes[i].id == id) node = &b->nodes[i];
+    }
+    if (node == NULL) return BOARD_ROOT_ID;
+    if (node->dir) return node->id;
+    snprintf(parent, sizeof parent, "%s", node->path);
+    slash = strrchr(parent, '/');
+    if (slash == NULL || slash == parent) return BOARD_ROOT_ID;
+    *slash = '\0';
+    dir = board_find(b, parent);
+    return dir != NULL ? dir->id : BOARD_ROOT_ID;
+}
+
 /** @brief The records since the last ask, from this backend's own reader of
- *  the kernel's change ring.  A change to the store's folder is a change
- *  under it; a record other than "changed" reloads the manifest. */
+ *  the kernel's change ring, each a change under the folder it touches, so
+ *  only views at or below that folder re-list; a record other than
+ *  "changed" reloads the manifest. */
 static int bd_changes(tiku_backend_t *be, tiku_model_change_t *out, int max, int *complete)
 {
     board_t *b = be->impl;
@@ -452,21 +476,10 @@ static int bd_changes(tiku_backend_t *be, tiku_model_change_t *out, int max, int
                 }
                 more = n > 0u;
             } else if (sscanf(p, "%11s %lx", op, &id) == 2) {
-                const board_node_t *node = NULL;
-                int kind = strcmp(op, "created") == 0 ? TIKU_CH_CREATED
-                           : strcmp(op, "removed") == 0 ? TIKU_CH_REMOVED
-                           : strcmp(op, "moved") == 0 ? TIKU_CH_MOVED : TIKU_CH_CHANGED;
-
-                if (kind != TIKU_CH_CHANGED) reload = 1;
-                for (int i = 0; i < b->count; i++) {
-                    if (b->nodes[i].id == (uint32_t)id) node = &b->nodes[i];
-                }
-                if (kind == TIKU_CH_CHANGED && node != NULL && node->dir && in_store(node->path)) {
-                    kind = TIKU_CH_SUBTREE;
-                }
+                if (strcmp(op, "changed") != 0) reload = 1;
                 if (w < max) {
-                    out[w].id = (uint64_t)id;
-                    out[w].op = kind;
+                    out[w].id = folder_of(b, (uint32_t)id);
+                    out[w].op = TIKU_CH_SUBTREE;
                     w++;
                 } else if (complete != NULL) {
                     *complete = 0;
@@ -486,6 +499,10 @@ static int bd_path_of_id(tiku_backend_t *be, uint64_t id, char *out, size_t max)
     board_t *b = be->impl;
     int r = -1;
 
+    if (id == BOARD_ROOT_ID) {
+        snprintf(out, max, "/");
+        return 0;
+    }
     pthread_mutex_lock(&b->lock);
     for (int i = 0; i < b->count && r != 0; i++) {
         if (b->nodes[i].id == (uint32_t)id) {
