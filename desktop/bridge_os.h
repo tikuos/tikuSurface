@@ -37,6 +37,9 @@ uintptr_t surface_os_desktop_sample(void);
 int surface_os_card_mount(void);
 /** @brief Whether the caller is the desktop thread. */
 int surface_os_in_desktop(void);
+/** @brief Whether the desktop thread is blocked, in its wait or on a lock;
+ *         callable from the kernel. */
+int surface_os_desktop_blocked(void);
 /** @brief The preempted desktop thread's program counter, return address
  *  and stack pointer from its saved frame; zero when it is not preempted. */
 int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp);
@@ -59,6 +62,9 @@ int surface_os_desktop_jobs_memory(void *memory, size_t bytes);
 /** @brief Mutexes and condition variables in use, and those refused for a
  *         full table; a refused lock leaves its caller unlocked. */
 void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused);
+/** @brief Stack canary faults the kernel has seen on its workers, the
+ *         desktop and job threads among them. */
+unsigned surface_os_desktop_canary_faults(void);
 /** @brief Enter and leave the interrupt-masked section; calls nest. */
 void surface_os_desktop_lock(void);
 void surface_os_desktop_unlock(void);

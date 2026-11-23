@@ -28,20 +28,24 @@
 #include <string.h>
 
 #define RGB_BYTES (SURFACE_DESKTOP_W * SURFACE_DESKTOP_H * 2u)
-/* The desktop keeps its state, desktop_t (2,586,224 bytes on the S31 with
- * TikuSurface's bounds), in a local variable of tracker_run(); the rest
- * covers the deepest call chains, among them emptying the Trash from an
- * inline job (a 280,640-byte frame).  The stack is painted with
- * STACK_PAINT at start; the status line reports the deepest use seen. */
-#define STACK_BYTES (3072u * 1024u)
+/* The desktop keeps its state, desktop_t, in a local variable of
+ * tracker_run(), whose frame is 2,609,920 bytes on the S31 with
+ * TikuSurface's bounds; the rest covers the call chains on the desktop
+ * thread, where no other frame passes 83,120 bytes (template_fill()).  Jobs,
+ * emptying the Trash among them, run on the job thread.  The deepest use
+ * seen on the panel is 2,739,456 bytes.  The stack is painted with
+ * STACK_PAINT at start; the status line reports the deepest use seen and
+ * the kernel's stack canary faults. */
+#define STACK_BYTES (2816u * 1024u)
 #define STACK_PAINT 0xa5a5a5a5u
 /* The stack of the desktop's job thread (TIKU_WORK_WORKERS in
  * desktop/desktop.mk), from compat/posix.  The deepest frame a job reaches
- * is emptying the Trash, fop_fs_empty_trash()'s 280,640 bytes.  The stack
- * comes out of the heap, which is the RAM home's free space as statvfs()
- * reports it, so it is no larger than that frame needs.  Painted as the
- * desktop's is; the status line reports its deepest use. */
-#define JOBS_BYTES (512u * 1024u)
+ * is emptying the Trash, fop_fs_empty_trash()'s 280,640 bytes, which leaves
+ * 112,576 bytes of this stack for the rest of its chain.  The stack comes
+ * out of the heap, which is the RAM home's free space as statvfs() reports
+ * it.  Painted as the desktop's is; the status line reports its deepest
+ * use. */
+#define JOBS_BYTES (384u * 1024u)
 #define STACK_SCAN_WORDS 4096u   /* words examined per turn for the high-water mark */
 #define SAMPLE_SLOTS 4096u       /* program counters kept, one per kernel turn */
 #define SAMPLE_LINE 48u          /* samples printed per turn by the dump */
@@ -131,7 +135,8 @@ static struct {
     uint32_t region_px;       /* the last frame's converted pixels */
     uint32_t convert_cpu;     /* time inside conversion calls for this frame */
     uint32_t convert_cpu_last; /* the same for the last frame */
-    uint64_t input_at;        /* when a down event was posted, until a frame shows it */
+    uint64_t input_at;        /* when a down event was posted, until a frame
+                               * the desktop drew after taking it is shown */
     uint32_t input_us;        /* that delay for the last down event */
     int stacks_on;            /* stack samples are being taken */
     uint32_t stacks_taken;    /* stack samples taken by this request */
@@ -220,6 +225,21 @@ static int card_pending(void)
     return b->card != NULL && b->card_token != b->card_done;
 }
 
+/** @brief Whether the pending card request may have the processor: the
+ *  driver moves its bytes by polling on the kernel thread, which preempts
+ *  the desktop thread.  The desktop thread's own request may, since that
+ *  thread waits for it.  The job thread's may only while the desktop thread
+ *  is blocked and no frame of its waits for the panel, so a press and the
+ *  frames it brings come first. */
+static int card_urgent(void)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+
+    if (b->card_foreground) return 1;
+    return surface_os_desktop_blocked() && rt.presenting == 0u &&
+           b->frame_token == b->done_token;
+}
+
 /** @brief Advance the desktop's card request by one bridge phase; nonzero
  *  when it finished.  A busy queue is retried on a later turn. */
 static int card_step(void)
@@ -286,6 +306,7 @@ void surface_desktop_card(surface_media_io_t *io)
 
     (void)pthread_mutex_lock(&card_turn);
     b->card = io;
+    b->card_foreground = surface_os_in_desktop();
     b->card_token++;
     surface_os_desktop_kick();
     while (!card_finished(NULL)) surface_os_desktop_wait(card_finished, NULL, 1000000u);
@@ -460,14 +481,18 @@ static void drain_log(void)
 }
 
 /** @brief Queue one pointer event; a full ring drops it.  A down event
- *  starts the measured delay until a frame taken after it is on the panel. */
+ *  starts the measured delay until a frame the desktop drew after taking
+ *  it is on the panel. */
 static void post(tiku_event_type_t type, int x, int y, uint64_t now)
 {
     surface_desktop_bridge_t *b = &surface_desktop_bridge;
     unsigned head = b->event_head;
 
     if (head - b->event_tail >= SURFACE_DESKTOP_EVENTS) return;
-    if (type == TIKU_EVENT_POINTER_DOWN) rt.input_at = now;
+    if (type == TIKU_EVENT_POINTER_DOWN) {
+        rt.input_at = now;
+        b->down_taken = 0;
+    }
     b->events[head % SURFACE_DESKTOP_EVENTS] = (tiku_input_event_t){
         .type = type, .button = 1, .x = x, .y = y,
         .time_us = now > INT64_MAX ? INT64_MAX : (int64_t)now };
@@ -755,7 +780,7 @@ int tiku_framebuffer_complete(tiku_framebuffer_t *owner, uint64_t token,
     rt.frame.completed++;
     rt.frame.frame_us = (uint32_t)(now - rt.frame_started);
     if (rt.frame.frame_us > rt.frame.max_frame_us) rt.frame.max_frame_us = rt.frame.frame_us;
-    if (rt.input_at != 0u && rt.frame_started >= rt.input_at) {
+    if (rt.input_at != 0u && b->down_taken && token > b->down_token) {
         rt.input_us = (uint32_t)(now - rt.input_at);
         rt.input_at = 0;
     }
@@ -1036,7 +1061,10 @@ int surface_runtime_poll(void)
         }
     }
     if (map_step()) woke = 1;
-    while (card_pending() && surface_os_time() - begin < PRESENT_TURN_US + CARD_TURN_US) {
+    /* A request that may not have the processor is polled once a turn. */
+    if (card_pending() && !card_urgent() && card_step()) woke = 1;
+    while (card_pending() && card_urgent() &&
+           surface_os_time() - begin < PRESENT_TURN_US + CARD_TURN_US) {
         if (card_step()) {
             woke = 1;
             break;
@@ -1076,7 +1104,7 @@ int surface_runtime_poll(void)
         surface_os_desktop_lock_use(&lock_mutexes, &lock_conds, &lock_refused);
         n = snprintf(line, sizeof line,
                      "desktop: turns=%lu frames=%lu waits=%lu events=%u/%u present=%lu/%lu phase=%u max_us=%lu"
-                     " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu locks=%u/%u/%u"
+                     " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu canary=%u locks=%u/%u/%u"
                      " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
                      " card=%lu/%lu/%lu/%lu/%lu mutations=%lu\n",
@@ -1087,6 +1115,7 @@ int surface_runtime_poll(void)
                      (unsigned long)refused, (unsigned long)largest,
                      (unsigned long)rt.stack_used, (unsigned long)STACK_BYTES,
                      (unsigned long)rt.jobs_used, (unsigned long)JOBS_BYTES,
+                     surface_os_desktop_canary_faults(),
                      lock_mutexes, lock_conds, lock_refused,
                      (unsigned long)console, (unsigned long)files, (unsigned long)calls, last,
                      (unsigned long)(begin / 1000u), (unsigned long)rt.frame.frame_us,
@@ -1118,7 +1147,7 @@ int surface_runtime_continue(void)
     /* Conversion and submission continue at once; a frame waiting on the
      * panel's DMA, or a burst past its bound, waits for the timer turn. */
     int work = rt.running && (rt.capturing || rt.sample_dump != UINT32_MAX ||
-        rt.stacks_dump != UINT32_MAX || card_pending() ||
+        rt.stacks_dump != UINT32_MAX || (card_pending() && card_urgent()) ||
         (rt.presenting != 0 && rt.presentation.phase >= 1u && rt.presentation.phase <= 2u) ||
          (rt.presenting == 0 && b->frame != NULL && b->frame_token != b->done_token));
 

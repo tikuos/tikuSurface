@@ -57,9 +57,9 @@ int surface_runtime_touch_log(char *buffer, size_t capacity);
 #define SURFACE_NATIVE_DESKTOP 0
 #endif
 /* The native desktop: two RGB565 scanout buffers, the desktop thread's
- * 3 MiB stack and the C-library heap the shell allocates from.  With
- * the display's 768,000-byte scanout this leaves 182,272 bytes of the
- * PSRAM tier free. */
+ * stack, its job thread's stack and the C-library heap the shell allocates
+ * from.  With the display's 768,000-byte scanout this leaves 182,272 bytes
+ * of the PSRAM tier free. */
 #if SURFACE_NATIVE_DESKTOP
 #define SURFACE_RUNTIME_BYTES (13056u * 1024u)
 #else

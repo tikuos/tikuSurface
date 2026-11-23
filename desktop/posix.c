@@ -59,7 +59,9 @@ typedef struct rnode {
 static rnode_t *root;
 /* Every change made to the tree counts here: creation, removal, renaming,
  * writing, truncation, and modes and times that change.  A call that
- * changes nothing does not count.  tiku_posix_mutations() hands the count
+ * changes nothing does not count, and a descriptor's writes count at its
+ * first write and at its close, so a file being copied in does not make
+ * every view re-list at each write.  tiku_posix_mutations() hands the count
  * to the posix backend, which reports a quiet tree to the views; each call
  * starts a new observation window.  A file created and removed within one
  * window is no change: its counts are taken back. */
@@ -158,6 +160,7 @@ typedef struct {
     uint64_t reader;    /* a card file's open reader, or 0 */
     unsigned gen;       /* opens of this number so far */
     int busy;           /* a card request on it is outstanding */
+    int wrote;          /* 0 unwritten, 1 its first write counted, 2 written since */
 } fd_t;
 static fd_t fds[FDS];
 
@@ -831,7 +834,7 @@ static void fd_fill(int fd, rnode_t *n, int flags, uint64_t reader)
 {
     unsigned gen = fds[fd].gen + 1u;
 
-    fds[fd] = (fd_t){ n, 0, flags, reader, gen, 0 };
+    fds[fd] = (fd_t){ n, 0, flags, reader, gen, 0, 0 };
 }
 
 /** @brief Wait until no card request is outstanding on @p f, which @p gen
@@ -948,6 +951,8 @@ static int _close_locked(int fd)
         f->busy = 0;
         announce_change();
     }
+    /* The writes after the first are counted once, here. */
+    if (f->wrote == 2) changed(f->node);
     if (--f->node->opened == 0 && f->node->unlinked && f->node != &random_device) node_free(f->node);
     f->node = NULL;
     return 0;
@@ -1090,7 +1095,12 @@ static _ssize_t _write_locked(int fd, const void *buf, size_t n)
     at = (f->flags & O_APPEND) ? f->node->size : (size_t)f->pos;
     if (at > SIZE_MAX - n || reserve(f->node, at + n) != 0) return -1;
     memcpy(f->node->data + at, buf, n);
-    changed(f->node);
+    if (!f->wrote) {
+        changed(f->node);
+        f->wrote = 1;
+    } else {
+        f->wrote = 2;
+    }
     file_bytes += (uint32_t)n;
     file_writes++;
     last_written = f->node;

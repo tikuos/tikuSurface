@@ -134,9 +134,19 @@ void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *r
     tiku_posix_thread_use(mutexes, conds, refused);
 }
 
+unsigned surface_os_desktop_canary_faults(void)
+{
+    return tiku_thread_canary_faults();
+}
+
 int surface_os_in_desktop(void)
 {
     return tiku_thread_self() == &desktop_worker;
+}
+
+int surface_os_desktop_blocked(void)
+{
+    return desktop_worker.state == TIKU_THREAD_BLOCKED;
 }
 
 /* The SD clock the card is mounted at; the media service accepts up to

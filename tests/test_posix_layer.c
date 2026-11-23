@@ -24,6 +24,8 @@ int _close(int fd);
 int _unlink(const char *path);
 int _rename(const char *old, const char *new);
 ssize_t _read(int fd, void *buf, size_t n);
+ssize_t _write(int fd, const void *buf, size_t n);
+int tiku_posix_mutations(uint64_t *count);
 off_t _lseek(int fd, off_t offset, int whence);
 int _fstat(int fd, struct stat *st);
 int _stat(const char *path, struct stat *st);
@@ -187,6 +189,24 @@ int main(void)
         assert(S_ISREG(st.st_mode) && (st.st_mode & 0222) == 0 && st.st_size > 0);
         assert(_stat("/home/Documents/Files here are lost at restart.txt", &st) == 0);
         assert((st.st_mode & 0222) == 0);
+    }
+
+    /* A descriptor's writes count as a change at its first write and at
+     * its close, not at each write. */
+    {
+        uint64_t before, after;
+        int fd = _open("/tmp/counted", O_WRONLY | O_CREAT, 0644);
+
+        assert(fd >= 0 && tiku_posix_mutations(&before) == 0);
+        assert(_write(fd, "a", 1) == 1 && tiku_posix_mutations(&after) == 0);
+        assert(after == before + 1u);
+        assert(_write(fd, "b", 1) == 1 && _write(fd, "c", 1) == 1);
+        assert(tiku_posix_mutations(&before) == 0 && before == after);
+        assert(_close(fd) == 0 && tiku_posix_mutations(&after) == 0);
+        assert(after == before + 1u);
+        fd = _open("/tmp/counted", O_RDONLY, 0);
+        assert(fd >= 0 && _close(fd) == 0 && tiku_posix_mutations(&before) == 0);
+        assert(before == after);
     }
 
     /* A directory removed while a stream holds it: the stream gives the

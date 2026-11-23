@@ -29,6 +29,10 @@ typedef struct {
     const tiku_surface_t *volatile frame;       /* desktop hands a frame */
     tiku_rect_t frame_damage;
     volatile uint64_t frame_token, done_token;  /* done follows the panel */
+    /* frame_token when the desktop took the last down event, set before
+     * down_taken: a frame with a later token was drawn after the press. */
+    volatile uint64_t down_token;
+    volatile int down_taken;
     volatile int frame_result;
     char log[SURFACE_DESKTOP_LOG];
     volatile unsigned log_head, log_tail;       /* desktop writes head */
@@ -39,6 +43,7 @@ typedef struct {
      * card_done to that token. */
     surface_media_io_t *volatile card;
     volatile unsigned card_token, card_done;
+    volatile int card_foreground;               /* the desktop thread asked */
     volatile int card_mounted;                  /* the kernel mounted it */
     char hash_path[64];                          /* a file to hash, or "" */
     volatile unsigned hash_token, hash_done;

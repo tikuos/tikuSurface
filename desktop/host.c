@@ -123,6 +123,10 @@ int tiku_host_poll(tiku_host_t *host, tiku_event_t *event)
         tail++;
     }
     b->event_tail = tail;
+    if (event->type == TIKU_EVENT_POINTER_DOWN) {
+        b->down_token = b->frame_token;
+        b->down_taken = 1;
+    }
     if (event->type == TIKU_EVENT_POINTER_DOWN || event->type == TIKU_EVENT_POINTER_UP ||
         event->type == TIKU_EVENT_POINTER_MOVE) {
         host->x = event->x;
