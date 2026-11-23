@@ -10,6 +10,9 @@
 #include <setjmp.h>
 #include <arch/esp32s31/tiku_watchdog_arch.h>
 static uint32_t regs[64],sfdp[32],ident,clock_root,spi0_ctrl,spi0_fsm;
+/* The core's bus timeout controls: protection on, threshold 65,535 cycles. */
+#define BUS_TIMEOUT 0x1ffffu
+static uint32_t ibus_timeout=BUS_TIMEOUT,dbus_timeout=BUS_TIMEOUT;
 static uint64_t ticks;
 static unsigned context=1,commands,busy,wel,remaining,duration;
 static unsigned hold_suspended,ignore_write,stuck,protected,write_enable_fail,software_resumes,cache_misses;
@@ -85,6 +88,8 @@ static volatile uint32_t *reg(uintptr_t at)
     if(at==0x20587064u)return &clock_root;
     if(at==0x20500010u)return &spi0_ctrl;
     if(at==0x20500054u)return &spi0_fsm;
+    if(at==0x20586124u)return &ibus_timeout;
+    if(at==0x20586128u)return &dbus_timeout;
     assert(at>=0x20501000u && at<0x20501100u && !(at&3u));
     return &regs[(at-0x20501000u)/4];
 }
@@ -92,10 +97,14 @@ static volatile uint32_t *reg(uintptr_t at)
 #define TIKU_S31_FLASH_REG(a) (*reg(a))
 #include <arch/esp32s31/tiku_storage_async_io.c>
 
-/** @brief Model cached execution while the controller arbitrates a pending write. */
+/** @brief Model cached execution while the controller arbitrates a pending write:
+ *  a read waiting on the suspend outlasts the core's bus timeout at 160 MHz, so
+ *  the timeouts are off while the flash is busy and on once no operation owns it. */
 static void cached_read(void)
 {
     execute();
+    if(busy) assert(!(ibus_timeout&1u) && !(dbus_timeout&1u));
+    if(!active_flash) assert(ibus_timeout==BUS_TIMEOUT && dbus_timeout==BUS_TIMEOUT);
     if(busy){
         assert((regs[0x9c/4]&0x30u)==0x20u && regs[0xa0/4]==0x350075);
         assert((regs[0xa4/4]>>16)==0x7a && (regs[0x98/4]&1u));
@@ -127,6 +136,7 @@ static void reset(void)
     duration=2400;remaining=0;hold_suspended=ignore_write=stuck=protected=write_enable_fail=0;
     commands=erases=programs=bytes=meter_ends=watchdogs=cache_reads=software_resumes=0;
     cache_misses=1;clock_root=0;spi0_ctrl=0x1234;spi0_fsm=0x5678;
+    ibus_timeout=dbus_timeout=BUS_TIMEOUT;
     regs[1]=0x123456;regs[2]=0x4321;regs[6]=0x200;regs[7]=3;regs[8]=4;regs[9]=5;regs[10]=6;
 }
 /** @brief Drain a flash operation while requiring cached reads and bounded callback work. */
