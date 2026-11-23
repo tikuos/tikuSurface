@@ -59,6 +59,14 @@ int surface_os_clock_state(void);
  *         stacks; 0, or -1 when refused.  Kernel owner only, before the
  *         desktop thread starts. */
 int surface_os_desktop_jobs_memory(void *memory, size_t bytes);
+/** @brief Make @p bytes at @p memory the C library's heap, through TikuOS's
+ *         compat/posix heap group; 0, or -1 when refused.  Kernel owner
+ *         only, before anything allocates. */
+int surface_os_desktop_heap_memory(void *memory, size_t bytes);
+/** @brief Heap bytes below the break, bytes given, growths refused and the
+ *         largest of them; any argument may be NULL.  Callable from the
+ *         kernel and the desktop's threads; it does not wait. */
+void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused, size_t *largest);
 /** @brief Mutexes and condition variables in use, and those refused for a
  *         full table; a refused lock leaves its caller unlocked. */
 void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused);

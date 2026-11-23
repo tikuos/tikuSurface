@@ -723,60 +723,11 @@ static void seed(const char *path, const char *text, mode_t mode)
 }
 
 /*---------------------------------------------------------------------------*/
-/* THE ARENA AND THE ENVIRONMENT                                             */
+/* THE ENVIRONMENT                                                           */
 /*---------------------------------------------------------------------------*/
-
-static unsigned char *heap_base, *heap_top, *heap_limit;
-
-/** @brief Hand newlib's heap the desktop's arena; called before the thread starts. */
-void surface_desktop_heap(void *base, size_t bytes)
-{
-    heap_base = heap_top = base;
-    heap_limit = (unsigned char *)base + bytes;
-}
-
-/* Heap growth requests refused, and the largest of them. */
-static uint32_t heap_refused;
-static size_t heap_refused_max;
-
-/** @brief Count of refused heap growth requests and the largest one's size. */
-void surface_desktop_heap_refused(uint32_t *count, size_t *largest)
-{
-    if (count != NULL) *count = heap_refused;
-    if (largest != NULL) *largest = heap_refused_max;
-}
-
-/** @brief Heap bytes in use and the arena's size. */
-void surface_desktop_heap_use(size_t *used, size_t *total)
-{
-    if (used != NULL) *used = (size_t)(heap_top - heap_base);
-    if (total != NULL) *total = (size_t)(heap_limit - heap_base);
-}
-
-void *_sbrk_r(struct _reent *r, ptrdiff_t increment)
-{
-    unsigned char *old;
-
-    surface_os_desktop_lock();
-    old = heap_top;
-    if (heap_base == NULL ||
-        (increment > 0 && (size_t)increment > (size_t)(heap_limit - heap_top)) ||
-        (increment < 0 && (size_t)-increment > (size_t)(heap_top - heap_base))) {
-        if (increment > 0) {
-            heap_refused++;
-            if ((size_t)increment > heap_refused_max) heap_refused_max = (size_t)increment;
-        }
-        surface_os_desktop_unlock();
-        r->_errno = ENOMEM;
-        return (void *)-1;
-    }
-    heap_top += increment;
-    surface_os_desktop_unlock();
-    return old;
-}
-
-void __malloc_lock(struct _reent *r) { (void)r; surface_os_desktop_lock(); }
-void __malloc_unlock(struct _reent *r) { (void)r; surface_os_desktop_unlock(); }
+/* The heap these files live in is TikuOS's compat/posix heap group over the
+ * runtime's arena (surface_os_desktop_heap_memory()); this file defines no
+ * heap hook and no allocator lock. */
 
 extern char **environ;
 static char *desktop_environment[] = { "HOME=/home", "USER=tiku", "LANG=en_US.UTF-8", NULL };
@@ -1523,7 +1474,7 @@ static int statvfs_locked(const char *path, struct statvfs *sv)
     size_t used, total;
 
     if (lookup(path) == NULL) return -1;
-    surface_desktop_heap_use(&used, &total);
+    surface_os_desktop_heap_use(&used, &total, NULL, NULL);
     memset(sv, 0, sizeof *sv);
     sv->f_bsize = sv->f_frsize = 4096;
     sv->f_blocks = total / 4096u;

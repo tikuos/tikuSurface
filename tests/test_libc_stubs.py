@@ -102,5 +102,53 @@ class LibcStubTests(unittest.TestCase):
             stubs.check('\n'.join(table(*self.baseline())) + '\n')
 
 
+LIBC_DIR = '/opt/tc/riscv32-esp-elf/lib/rv32imafc/ilp32f/'
+
+
+def heap_map(sbrk_from, lock_from='build/s31-native-local/compat/posix/tiku_posix_sbrk.o'):
+    """A memory map placing the heap hooks: _sbrk_r from @p sbrk_from and the
+    allocator's lock, its name on the line above, from @p lock_from."""
+    return '\n'.join(['Linker script and memory map', '',
+                      ' .text._sbrk_r  0x2f005a5c       0x20 %s' % sbrk_from,
+                      '                0x2f005a5c                _sbrk_r',
+                      ' .text.__malloc_lock',
+                      '                0x2f00aae2        0xc %s' % lock_from,
+                      ' .text.__malloc_unlock',
+                      '                0x2f00aaee        0xc %s' % lock_from]) + '\n'
+
+
+class HeapHookTests(unittest.TestCase):
+    """The desktop's heap hook and allocator lock are the library's."""
+
+    def test_library_hooks_pass(self):
+        """_sbrk_r and the allocator's lock from compat/posix."""
+        text = heap_map('build/s31-native-local/compat/posix/tiku_posix_sbrk.o')
+        self.assertEqual(stubs.check_heap(text), [])
+
+    def test_product_hook_is_refused(self):
+        """A heap hook the product defines wins the link and is refused."""
+        text = heap_map('build/s31-native-local/tikuSurface/surface-ui.o')
+        errors = stubs.check_heap(text)
+        self.assertEqual(len(errors), 1)
+        self.assertIn('_sbrk_r comes from build/s31-native-local/tikuSurface/surface-ui.o', errors[0])
+
+    def test_product_lock_is_refused(self):
+        """A lock the product defines, as the desktop had, is refused."""
+        text = heap_map('build/x/compat/posix/tiku_posix_sbrk.o', 'build/x/tikuSurface/surface-ui.o')
+        self.assertEqual([e.split(' comes')[0] for e in stubs.check_heap(text)],
+                         ['__malloc_lock', '__malloc_unlock'])
+
+    def test_newlib_lock_is_refused(self):
+        """newlib's own lock, over the library's recursive lock, is refused:
+        the kernel thread cannot wait for it."""
+        text = heap_map('build/x/compat/posix/tiku_posix_sbrk.o', LIBC_DIR + 'libc.a(libc_a-mlock.o)')
+        self.assertEqual(len(stubs.check_heap(text)), 2)
+
+    def test_missing_hook_is_refused(self):
+        """An image with no heap hook has no heap."""
+        text = 'Linker script and memory map\n\n'
+        self.assertEqual(len(stubs.check_heap(text)), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

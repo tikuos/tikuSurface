@@ -129,6 +129,17 @@ int surface_os_desktop_jobs_memory(void *memory, size_t bytes)
     return tiku_posix_thread_memory(memory, bytes) == 0 ? 0 : -1;
 }
 
+int surface_os_desktop_heap_memory(void *memory, size_t bytes)
+{
+    if (!tiku_thread_in_kernel()) return -1;
+    return tiku_posix_heap_memory(memory, bytes) == 0 ? 0 : -1;
+}
+
+void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused, size_t *largest)
+{
+    tiku_posix_heap_use(used, total, refused, largest);
+}
+
 void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused)
 {
     tiku_posix_thread_use(mutexes, conds, refused);

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 # Authors: Ambuj Varshney <ambuj@tiku-os.org>
 # SPDX-License-Identifier: Apache-2.0
-"""Refuse an image that runs a C-library system call from libnosys.
+"""Refuse an image that runs a C-library system call from libnosys, or whose
+heap hooks come from anywhere but TikuOS's library and the C library.
 
 The S31 link ends in `-lc -lnosys`: a system call that no object defines is
 taken from libnosys, whose definitions set errno to ENOSYS and return -1.
 The link succeeds and the call fails at run time.  This check reads the link
 map for the libnosys members the link pulled in and kept, confirms each
 member's symbol in the image, and refuses any not named in ALLOWED.
+
+The desktop's heap is TikuOS's compat/posix heap group: `_sbrk_r` and the
+allocator's lock, `__malloc_lock` and `__malloc_unlock`, must come from the
+library's object.  A definition in the product would win the link silently,
+and newlib's own lock would let the kernel thread trap on a thread's
+allocation; HEAP_HOOKS names where each must come from.
 """
 import argparse
 import re
@@ -22,6 +29,11 @@ MEMBER = re.compile(r'(\S*libnosys\.a\(([^)]+)\))')
 REFERENCE = re.compile(r'\((\w+)\)\s*$')
 SECTION = re.compile(r'^\s*(\S+)?\s+0x([0-9a-fA-F]+)\s+0x([0-9a-fA-F]+)\s+(\S*libnosys\.a\(([^)]+)\))\s*$')
 CODE = ('.text', '.iram', '.literal')
+# Each heap hook and the object its code must come from.
+HEAP_HOOKS = (('_sbrk_r', 'compat/posix/tiku_posix_sbrk.o'),
+              ('__malloc_lock', 'compat/posix/tiku_posix_sbrk.o'),
+              ('__malloc_unlock', 'compat/posix/tiku_posix_sbrk.o'))
+PLACED = re.compile(r'^\s*(\S+)?\s+0x([0-9a-fA-F]+)\s+0x([0-9a-fA-F]+)\s+(\S+)\s*$')
 
 
 def members(text):
@@ -110,6 +122,44 @@ def check(text, symbols=None, allowed=ALLOWED):
     return errors
 
 
+def hook_owners(text):
+    """The object whose code each function section comes from: {section: object}.
+
+    Reads the map's memory map; a section name that is too long sits on the
+    line above its address.  Only sections of nonzero size count.
+    """
+    lines = text.splitlines()
+    try:
+        start = lines.index('Linker script and memory map')
+    except ValueError:
+        raise ValueError('the map has no memory map')
+    found, name = {}, None
+    for line in lines[start + 1:]:
+        m = PLACED.match(line)
+        if m is None:
+            s = line.strip()
+            name = s if s.startswith('.') and len(s.split()) == 1 else None
+            continue
+        section = m.group(1) or name
+        name = None
+        if section is not None and section.startswith(CODE) and int(m.group(3), 16) > 0:
+            found.setdefault(section, m.group(4))
+    return found
+
+
+def check_heap(text, hooks=HEAP_HOOKS):
+    """Each heap hook missing or from another object, as messages."""
+    owners = hook_owners(text)
+    errors = []
+    for symbol, want in hooks:
+        owner = owners.get('.text.' + symbol)
+        if owner is None:
+            errors.append('%s is not in the image' % symbol)
+        elif not owner.endswith(want):
+            errors.append('%s comes from %s, not %s' % (symbol, owner, want))
+    return errors
+
+
 def image_symbols(elf, nm):
     """Defined symbols of @p elf by address, read with @p nm."""
     out = subprocess.run([nm, '--defined-only', elf], capture_output=True, text=True,
@@ -138,6 +188,7 @@ def main():
         symbols = image_symbols(args.elf, nm)
     try:
         errors = check(text, symbols)
+        heap = check_heap(text)
     except ValueError as e:
         print('libc stubs: ' + str(e))
         return 1
@@ -145,7 +196,11 @@ def main():
         print('libc stubs: ' + e)
     if not errors:
         print('libc stubs: none outside ' + ' '.join(ALLOWED))
-    return 1 if errors else 0
+    for e in heap:
+        print('heap hooks: ' + e)
+    if not heap:
+        print('heap hooks: ' + ', '.join('%s from %s' % h for h in HEAP_HOOKS))
+    return 1 if errors or heap else 0
 
 
 if __name__ == '__main__':

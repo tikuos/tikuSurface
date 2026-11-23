@@ -66,9 +66,6 @@
 #define STATUS_US 2000000u      /* console status line period */
 
 int surface_desktop_main(int argc, char **argv);
-void surface_desktop_heap(void *base, size_t bytes);
-void surface_desktop_heap_use(size_t *used, size_t *total);
-void surface_desktop_heap_refused(uint32_t *count, size_t *largest);
 void surface_desktop_write_stats(uint32_t *console, uint32_t *files, uint32_t *calls,
                                  const char **last);
 int surface_desktop_files(void);
@@ -934,8 +931,9 @@ int surface_runtime_start(void)
     rt.jobs = (uint32_t *)(void *)jobs;
     for (uint32_t i = 0; i < JOBS_BYTES / 4u; i++) rt.jobs[i] = STACK_PAINT;
     memset(rt.rgb[0], 0, 2u * RGB_BYTES);
-    surface_desktop_heap(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES - JOBS_BYTES);
-    if (surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0) {
+    if (surface_os_desktop_heap_memory(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES -
+                                       JOBS_BYTES) != 0 ||
+        surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0) {
         rt.failed = 1;
         return 0;
     }
@@ -1097,8 +1095,7 @@ int surface_runtime_poll(void)
         unsigned lock_mutexes = 0, lock_conds = 0, lock_refused = 0;
 
         rt.last_status = begin;
-        surface_desktop_heap_use(&used, &total);
-        surface_desktop_heap_refused(&refused, &largest);
+        surface_os_desktop_heap_use(&used, &total, &refused, &largest);
         surface_desktop_write_stats(&console, &files, &calls, &last);
         (void)tiku_posix_mutations(&mutations);
         surface_os_desktop_lock_use(&lock_mutexes, &lock_conds, &lock_refused);
@@ -1195,7 +1192,7 @@ void surface_runtime_stats(surface_runtime_stats_t *out)
 
     if (out == NULL) return;
     memset(out, 0, sizeof *out);
-    surface_desktop_heap_use(&used, &total);
+    surface_os_desktop_heap_use(&used, &total, NULL, NULL);
     out->running = (uint32_t)rt.running;
     out->turns = rt.turns;
     out->frames = surface_desktop_bridge.frames;

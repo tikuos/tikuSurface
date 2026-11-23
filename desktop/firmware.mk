@@ -45,6 +45,9 @@ S31_LDFLAGS += -Wl,-u,tiku_s31_sd_open_begin,-u,tiku_s31_sd_read_begin,-u,tiku_s
 # library's are left out.
 TIKU_POSIX_ENABLE := 1
 TIKU_POSIX_FILE_HOOKS := 0
+# The C library's heap is the library's heap group over the runtime's arena,
+# with its allocator lock, a short interrupt-masked section.
+TIKU_POSIX_HEAP := 1
 # Stomme's jobs run on one thread of the library (TIKU_WORK_WORKERS in
 # desktop.mk); the desktop's mutexes and conditions, its kits' among them,
 # fit the tables with room to spare, and the status line shows their use.
@@ -66,7 +69,7 @@ DESKTOP_ROOTS := surface_runtime_start surface_runtime_stop surface_runtime_poll
     surface_runtime_continue surface_runtime_launch surface_runtime_calibrate \
     surface_runtime_calibration surface_runtime_preferences surface_runtime_set_preferences \
     surface_runtime_stats surface_runtime_frame_stats surface_runtime_input_stats \
-    surface_runtime_fail_at surface_touch_map_valid _open _sbrk_r
+    surface_runtime_fail_at surface_touch_map_valid _open
 # SURFACE_HEAP_PROFILE=1 records the desktop's heap blocks by call site; the
 # control file's "heap" command prints them.
 SURFACE_HEAP_PROFILE ?= 0

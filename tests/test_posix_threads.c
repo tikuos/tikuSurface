@@ -157,6 +157,13 @@ uint64_t surface_desktop_now_us(void) { return 1000000u; }
 void surface_os_desktop_exit(void) {}
 void surface_os_desktop_kick(void) {}
 void surface_os_desktop_lock(void) {}
+void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused, size_t *largest)
+{
+    if (used != NULL) *used = 1u << 20;
+    if (total != NULL) *total = 4u << 20;
+    if (refused != NULL) *refused = 0;
+    if (largest != NULL) *largest = 0;
+}
 void surface_os_desktop_unlock(void) {}
 void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us)
 { (void)ready; (void)context; (void)timeout_us; }

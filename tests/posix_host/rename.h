@@ -32,8 +32,6 @@
 #define _link px_link
 #define _lseek px_lseek
 #define lstat pxlstat
-#define __malloc_lock px__malloc_lock
-#define __malloc_unlock px__malloc_unlock
 #define _mkdir px_mkdir
 #define mkdir pxmkdir
 #define mkdtemp pxmkdtemp
@@ -52,7 +50,6 @@
 #define _rename px_rename
 #define rewinddir pxrewinddir
 #define rmdir pxrmdir
-#define _sbrk_r px_sbrk_r
 #define _stat px_stat
 #define statvfs pxstatvfs
 #define symlink pxsymlink
