@@ -72,6 +72,8 @@ int surface_desktop_main(int argc, char **argv);
 void surface_desktop_write_stats(uint32_t *console, uint32_t *files, uint32_t *calls,
                                  const char **last);
 int surface_desktop_files(void);
+int surface_desktop_views_load(void);
+int surface_desktop_views_save(void);
 int surface_desktop_random_seed(void);
 int tiku_posix_mutations(uint64_t *count);
 void surface_desktop_selftest(void);
@@ -904,6 +906,7 @@ static void desktop_thread(void *arg)
     (void)arg;
     surface_desktop_selftest();
     code = surface_desktop_main(1, argv);
+    (void)surface_desktop_views_save();
     surface_desktop_bridge.exit_code = code;
     surface_desktop_bridge.exited = 1;
     surface_os_desktop_kick();
@@ -948,6 +951,11 @@ int surface_runtime_start(void)
         surface_desktop_bridge.card_mounted = surface_os_card_mount() == 0;
     }
     if (surface_desktop_files() != 0) return 0;
+    if (surface_desktop_views_load() != 0) {
+        static const char line[] = "TikuSurface: the folder views in the store did not load\n";
+
+        surface_os_desktop_print(line, sizeof line - 1u);
+    }
     if (surface_desktop_random_seed() != 0) {
         static const char line[] = "TikuSurface: the hardware random source gave no seed\n";
 

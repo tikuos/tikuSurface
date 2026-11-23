@@ -14,11 +14,15 @@
 #define chown pxchown
 #define _close px_close
 #define closedir pxclosedir
+#define environ pxenviron
 #define execlp pxexeclp
 #define execvp pxexecvp
 #define _exit px_exit
 #define fchmod pxfchmod
 #define _fcntl px_fcntl
+#define fgetxattr pxfgetxattr
+#define fremovexattr pxfremovexattr
+#define fsetxattr pxfsetxattr
 #define _fstat px_fstat
 #define fstatvfs pxfstatvfs
 #define fsync pxfsync
@@ -27,13 +31,15 @@
 #define geteuid pxgeteuid
 #define getloadavg pxgetloadavg
 #define _getpid px_getpid
+#define getxattr pxgetxattr
 #define _isatty px_isatty
 #define lchown pxlchown
 #define _link px_link
+#define listxattr pxlistxattr
 #define _lseek px_lseek
 #define lstat pxlstat
-#define _mkdir px_mkdir
 #define mkdir pxmkdir
+#define _mkdir px_mkdir
 #define mkdtemp pxmkdtemp
 #define mkstemp pxmkstemp
 #define mkstemps pxmkstemps
@@ -47,9 +53,11 @@
 #define readdir pxreaddir
 #define readlink pxreadlink
 #define realpath pxrealpath
+#define removexattr pxremovexattr
 #define _rename px_rename
 #define rewinddir pxrewinddir
 #define rmdir pxrmdir
+#define setxattr pxsetxattr
 #define _stat px_stat
 #define statvfs pxstatvfs
 #define symlink pxsymlink
@@ -60,5 +68,4 @@
 #define utimensat pxutimensat
 #define waitpid pxwaitpid
 #define _write px_write
-#define environ pxenviron
 #endif

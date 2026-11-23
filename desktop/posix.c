@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/time.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -52,6 +53,7 @@ typedef struct rnode {
     time_t mtime;
     int opened, unlinked;
     struct card_node *card;    /* set for nodes under /Card */
+    struct xattr *attrs;       /* its extended attributes */
     uint32_t born, counted;    /* observation window it was created in, and */
     uint32_t changes;          /* its changes counted in window `counted` */
 } rnode_t;
@@ -293,8 +295,11 @@ static void node_detach(rnode_t *n)
 
 static void card_forget(rnode_t *n);
 
+static void attrs_free(rnode_t *n);
+
 static void node_free(rnode_t *n)
 {
+    attrs_free(n);
     free(n->data);
     card_forget(n);
     free(n);
@@ -742,7 +747,7 @@ static int surface_desktop_files_locked(void)
     if (root == NULL) return -1;
     (void)make_dirs("/home/Desktop");
     (void)make_dirs("/home/Documents");
-    (void)make_dirs("/home/.config/tracker");
+    (void)make_dirs("/home/.config/tracker/Desktop");
     (void)make_dirs("/system/deskbar");
     (void)make_dirs("/system/apps");
     (void)make_dirs("/tmp");
@@ -1025,6 +1030,288 @@ static int stored_open(unsigned i, const char *key, int main, int flags)
         announce_change(); \
         if ((f)->stored_main) stored_changed((unsigned)(f)->stored - 1u); \
     } while (0)
+
+/*---------------------------------------------------------------------------*/
+/* EXTENDED ATTRIBUTES                                                       */
+/*---------------------------------------------------------------------------*/
+/* A node's extended attributes are a list on the node, so a file's go with
+ * it.  The directories in `kept` exist at every start: their attributes are
+ * also the store's /data/ts/views record, by path, loaded at start, written
+ * when the desktop quits and, after a change, once VIEWS_PACE_US has passed
+ * since the last write. */
+#define XATTR_NAME 64u
+#define XATTR_VALUE 4096u
+#define VIEWS_KEY "/data/ts/views"
+#define VIEWS_MAGIC "TSV1"
+#define VIEWS_PACE_US (3600ull * 1000000ull)
+typedef struct xattr {
+    struct xattr *next;
+    char name[XATTR_NAME];
+    size_t len;
+    unsigned char value[];
+} xattr_t;
+static const char *const kept[] = {
+    "/home", "/home/Desktop", "/home/Documents", "/home/.config/tracker/Desktop",
+};
+#define KEPT (sizeof kept / sizeof kept[0])
+static int views_dirty;
+static uint64_t views_saved_us;
+
+static void attrs_free(rnode_t *n)
+{
+    while (n->attrs != NULL) {
+        xattr_t *a = n->attrs;
+        n->attrs = a->next;
+        free(a);
+    }
+}
+
+/** @brief Whether @p n is a directory in `kept`. */
+static int node_kept(const rnode_t *n)
+{
+    for (unsigned i = 0; i < KEPT; i++) {
+        if (lookup(kept[i]) == n) return 1;
+    }
+    return 0;
+}
+
+static xattr_t *attr_find(rnode_t *n, const char *name)
+{
+    for (xattr_t *a = n->attrs; a != NULL; a = a->next) {
+        if (strcmp(a->name, name) == 0) return a;
+    }
+    return NULL;
+}
+
+/** @brief Set or, with @p value NULL, remove @p name on @p n.
+ *  @return 0, or -1 with errno */
+static int attr_put(rnode_t *n, const char *name, const void *value, size_t len, int flags)
+{
+    xattr_t *old = attr_find(n, name), *a, **p;
+
+    if (strlen(name) >= XATTR_NAME) {
+        errno = ERANGE;
+        return -1;
+    }
+    if ((flags & XATTR_CREATE) && old != NULL) {
+        errno = EEXIST;
+        return -1;
+    }
+    if (((flags & XATTR_REPLACE) || value == NULL) && old == NULL) {
+        errno = ENODATA;
+        return -1;
+    }
+    if (value != NULL && len > XATTR_VALUE) {
+        errno = E2BIG;
+        return -1;
+    }
+    a = NULL;
+    if (value != NULL) {
+        a = malloc(sizeof *a + len);
+        if (a == NULL) {
+            errno = ENOSPC;
+            return -1;
+        }
+        snprintf(a->name, sizeof a->name, "%s", name);
+        a->len = len;
+        memcpy(a->value, value, len);
+    }
+    for (p = &n->attrs; *p != NULL; p = &(*p)->next) {
+        if (*p == old) {
+            *p = old->next;
+            free(old);
+            break;
+        }
+    }
+    if (a != NULL) {
+        a->next = n->attrs;
+        n->attrs = a;
+    }
+    return 0;
+}
+
+static ssize_t attr_get(rnode_t *n, const char *name, void *value, size_t size)
+{
+    xattr_t *a = attr_find(n, name);
+
+    if (a == NULL) {
+        errno = ENODATA;
+        return -1;
+    }
+    if (size == 0u) return (ssize_t)a->len;
+    if (size < a->len) {
+        errno = ERANGE;
+        return -1;
+    }
+    memcpy(value, a->value, a->len);
+    return (ssize_t)a->len;
+}
+
+static ssize_t attr_list(rnode_t *n, char *list, size_t size)
+{
+    size_t need = 0u, at = 0u;
+
+    for (xattr_t *a = n->attrs; a != NULL; a = a->next) need += strlen(a->name) + 1u;
+    if (size == 0u) return (ssize_t)need;
+    if (size < need) {
+        errno = ERANGE;
+        return -1;
+    }
+    for (xattr_t *a = n->attrs; a != NULL; a = a->next) {
+        size_t k = strlen(a->name) + 1u;
+        memcpy(list + at, a->name, k);
+        at += k;
+    }
+    return (ssize_t)need;
+}
+
+/** @brief The node whose attributes @p path names; NULL with ENOTSUP for a
+ *  card, board or store path, whose files have none here. */
+static rnode_t *attr_node(const char *path)
+{
+    char full[PATH_MAX], key[PATH_MAX];
+    int main_file;
+
+    if (under(path, "/Card", full) != NULL || under(path, "/Board", full) != NULL ||
+        stored_path(path, key, sizeof key, &main_file) >= 0) {
+        errno = ENOTSUP;
+        return NULL;
+    }
+    return lookup(path);
+}
+
+/** @brief The node of descriptor @p fd's file; NULL with errno. */
+static rnode_t *attr_fd_node(int fd)
+{
+    fd_t *f = fd_of(fd);
+
+    if (f == NULL) return NULL;
+    if (f->node == &board_device || f->node == &store_device || f->node->card != NULL ||
+        f->node == &random_device) {
+        errno = ENOTSUP;
+        return NULL;
+    }
+    return f->node;
+}
+
+/** @brief Write the kept directories' attributes to the store.
+ *  @return 0, or -1 with errno; the record stays as it was on failure */
+static int views_save(void)
+{
+    unsigned char *buf = NULL;
+    size_t len = 4u, cap = 256u;
+    int fd, r;
+
+    buf = malloc(cap);
+    if (buf == NULL) return -1;
+    memcpy(buf, VIEWS_MAGIC, 4u);
+    for (unsigned i = 0; i < KEPT; i++) {
+        rnode_t *n = lookup(kept[i]);
+        for (xattr_t *a = n != NULL ? n->attrs : NULL; a != NULL; a = a->next) {
+            size_t pl = strlen(kept[i]) + 1u, nl = strlen(a->name) + 1u;
+            size_t need = len + pl + nl + 4u + a->len;
+            uint32_t vl = (uint32_t)a->len;
+            if (need > cap) {
+                unsigned char *grown;
+                while (cap < need) cap *= 2u;
+                grown = realloc(buf, cap);
+                if (grown == NULL) {
+                    free(buf);
+                    errno = ENOMEM;
+                    return -1;
+                }
+                buf = grown;
+            }
+            memcpy(buf + len, kept[i], pl);
+            len += pl;
+            memcpy(buf + len, a->name, nl);
+            len += nl;
+            memcpy(buf + len, &vl, 4u);
+            len += 4u;
+            memcpy(buf + len, a->value, a->len);
+            len += a->len;
+        }
+    }
+    fd = tiku_posix_open(VIEWS_KEY, O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0 || tiku_posix_write(fd, buf, len) != (ssize_t)len) {
+        int e = errno;
+        free(buf);
+        if (fd >= 0) WITHOUT_LAYER(r, tiku_posix_close(fd));
+        errno = e;
+        return -1;
+    }
+    free(buf);
+    WITHOUT_LAYER(r, tiku_posix_close(fd));
+    if (r == 0) {
+        views_dirty = 0;
+        views_saved_us = surface_desktop_now_us();
+    }
+    return r;
+}
+
+/** @brief After a change to a kept directory's attributes: write the record
+ *  once VIEWS_PACE_US has passed since the last write. */
+static void views_changed(void)
+{
+    views_dirty = 1;
+    if (surface_desktop_now_us() - views_saved_us >= VIEWS_PACE_US) (void)views_save();
+}
+
+int surface_desktop_views_save(void)
+{
+    int r = 0;
+
+    enter();
+    if (views_dirty) r = views_save();
+    leave();
+    return r;
+}
+
+int surface_desktop_views_load(void)
+{
+    unsigned char *buf;
+    struct stat st;
+    size_t got = 0u, at = 4u;
+    int fd;
+
+    fd = tiku_posix_open(VIEWS_KEY, O_RDONLY);
+    if (fd < 0) return errno == ENOENT ? 0 : -1;
+    if (tiku_posix_fstat(fd, &st) != 0 || (buf = malloc((size_t)st.st_size + 1u)) == NULL) {
+        (void)tiku_posix_close(fd);
+        return -1;
+    }
+    while (got < (size_t)st.st_size) {
+        ssize_t r = tiku_posix_read(fd, buf + got, (size_t)st.st_size - got);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    (void)tiku_posix_close(fd);
+    enter();
+    if (got >= 4u && memcmp(buf, VIEWS_MAGIC, 4u) == 0) {
+        while (at < got) {
+            const char *path = (const char *)buf + at, *name;
+            size_t pl = strnlen(path, got - at), nl;
+            uint32_t vl;
+            rnode_t *n;
+            if (pl == got - at) break;
+            at += pl + 1u;
+            name = (const char *)buf + at;
+            nl = strnlen(name, got - at);
+            if (nl == got - at || got - at - nl - 1u < 4u) break;
+            at += nl + 1u;
+            memcpy(&vl, buf + at, 4u);
+            at += 4u;
+            if (vl > got - at) break;
+            n = lookup(path);
+            if (n != NULL && node_kept(n)) (void)attr_put(n, name, buf + at, vl, 0);
+            at += vl;
+        }
+    }
+    leave();
+    free(buf);
+    views_saved_us = surface_desktop_now_us();
+    return 0;
+}
 
 static int _open_locked(const char *path, int flags, int mode)
 {
@@ -2091,6 +2378,7 @@ pid_t waitpid(pid_t pid, int *status, int options) { (void)pid; (void)status; (v
 
 void _exit(int code)
 {
+    (void)surface_desktop_views_save();
     surface_desktop_bridge.exit_code = code;
     surface_desktop_bridge.exited = 1;
     surface_os_desktop_kick();
@@ -2409,6 +2697,92 @@ int closedir(DIR *dp)
 
     enter();
     r = closedir_locked(dp);
+    leave();
+    return r;
+}
+
+/** @brief Set (@p value non-NULL) or remove attribute @p name of node @p n,
+ *  under the layer's lock; a kept directory's change reaches the store. */
+static int attr_change(rnode_t *n, const char *name, const void *value, size_t size, int flags)
+{
+    if (n == NULL) return -1;
+    if (attr_put(n, name, value, size, flags) != 0) return -1;
+    if (node_kept(n)) views_changed();
+    return 0;
+}
+
+ssize_t getxattr(const char *path, const char *name, void *value, size_t size)
+{
+    rnode_t *n;
+    ssize_t r = -1;
+
+    enter();
+    n = attr_node(path);
+    if (n != NULL) r = attr_get(n, name, value, size);
+    leave();
+    return r;
+}
+
+ssize_t fgetxattr(int fd, const char *name, void *value, size_t size)
+{
+    rnode_t *n;
+    ssize_t r = -1;
+
+    enter();
+    n = attr_fd_node(fd);
+    if (n != NULL) r = attr_get(n, name, value, size);
+    leave();
+    return r;
+}
+
+ssize_t listxattr(const char *path, char *list, size_t size)
+{
+    rnode_t *n;
+    ssize_t r = -1;
+
+    enter();
+    n = attr_node(path);
+    if (n != NULL) r = attr_list(n, list, size);
+    leave();
+    return r;
+}
+
+int setxattr(const char *path, const char *name, const void *value, size_t size, int flags)
+{
+    int r;
+
+    enter();
+    r = attr_change(attr_node(path), name, value != NULL ? value : "", size, flags);
+    leave();
+    return r;
+}
+
+int fsetxattr(int fd, const char *name, const void *value, size_t size, int flags)
+{
+    int r;
+
+    enter();
+    r = attr_change(attr_fd_node(fd), name, value != NULL ? value : "", size, flags);
+    leave();
+    return r;
+}
+
+int removexattr(const char *path, const char *name)
+{
+    int r;
+
+    enter();
+    r = attr_change(attr_node(path), name, NULL, 0u, 0);
+    leave();
+    return r;
+}
+
+int fremovexattr(int fd, const char *name)
+{
+    int r;
+
+    enter();
+    r = attr_change(attr_fd_node(fd), name, NULL, 0u, 0);
     leave();
     return r;
 }

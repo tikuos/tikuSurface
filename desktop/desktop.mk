@@ -40,7 +40,8 @@ DESKTOP_ARCH ?= -march=rv32imafc_zicsr_zifencei -mabi=ilp32f
 # remote sessions the listener holds (the panel serves none), and the
 # notices one batch holds (an event list is a stack local).  A desktop
 # started on a fresh home holds 31 native entries and 52 providers.  The
-# settings files are polled for outside edits every 5 s instead of 0.5 s.
+# settings files are polled for outside edits every 5 s instead of 0.5 s,
+# and that poll writes unsaved session records at most once an hour.
 # Navigation menus open four levels deep: on an 800-pixel screen no more
 # cascading submenus fit beside one another.  Window content caches and
 # folder windows' kept pixels take at most 1 MiB each; windows past that
@@ -54,10 +55,13 @@ DESKTOP_LIMITS := -DTIKU_TRK_POSES_MAX=256 -DTIKU_STATE_UPDATE_BYTES=262144 \
 # 1: a mark under the finger, a slop before the pointer moves and double taps
 # landing on the first tap (desktop/gesture.h); 0: raw touch contacts.
 SURFACE_TOUCH_MODE ?= 1
+# TIKU_STATE_XATTR: Stomme's state kit keeps folder views and icon places as
+# extended attributes, which desktop/posix.c answers.
 DESKTOP_CFLAGS := $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOURCE \
     -ffunction-sections -fdata-sections -fstack-usage -Wall -Wno-unused-parameter \
     -DTIKU_SURFACE_TIKUOS=1 -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DTIKU_WORK_WORKERS=1 \
     -DSURFACE_TOUCH_MODE=$(SURFACE_TOUCH_MODE) \
+    -DTIKU_STATE_XATTR=1 \
     -include $(DESKTOP_ROOT)/desktop/tikuos_libc.h \
     -include $(DESKTOP_GEN)/tiku_sdk_identity.h $(DESKTOP_LIMITS) $(DESKTOP_INCLUDES)
 

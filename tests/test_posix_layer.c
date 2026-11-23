@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 #include "bridge.h"
@@ -31,16 +32,19 @@ off_t _lseek(int fd, off_t offset, int whence);
 int _fstat(int fd, struct stat *st);
 int _stat(const char *path, struct stat *st);
 int surface_desktop_files(void);
+int surface_desktop_views_load(void);
+int surface_desktop_views_save(void);
 int _fcntl(int fd, int cmd, int arg);
 int mkstemp(char *tmpl);
 char *realpath(const char *path, char *resolved);
 
-/* The desktop side the layer calls: no card, no log, a fixed clock. */
+/* The desktop side the layer calls: no card, no log, a clock the test sets. */
 surface_desktop_bridge_t surface_desktop_bridge;
 char **environ;
 void surface_desktop_card(surface_media_io_t *io) { io->result = SURFACE_MEDIA_UNAVAILABLE; }
 void surface_desktop_log(const void *bytes, size_t length) { (void)bytes; (void)length; }
-uint64_t surface_desktop_now_us(void) { return 1000000u; }
+static uint64_t test_now_us = 1000000u;
+uint64_t surface_desktop_now_us(void) { return test_now_us; }
 void surface_os_desktop_exit(void) {}
 void surface_os_desktop_kick(void) {}
 void surface_os_desktop_lock(void) {}
@@ -310,6 +314,116 @@ static void test_settings_store(void)
     assert(fake_holds("ts/session", "state") && slurp("/home/.local/share/tracker/devices/local.state", buf, sizeof buf) == 5);
 }
 
+/** @brief Whether the store's record @p name holds the bytes of @p text. */
+static int fake_has(const char *name, const char *text)
+{
+    fake_file_t *f = fake_find(name);
+    size_t k = strlen(text);
+
+    for (size_t i = 0; f != NULL && i + k <= f->len; i++) {
+        if (memcmp(f->data + i, text, k) == 0) return 1;
+    }
+    return 0;
+}
+
+/** @brief Remove every attribute of @p path, as a new tree starts without. */
+static void forget_attributes(const char *path)
+{
+    char names[256];
+    ssize_t n = listxattr(path, names, sizeof names);
+
+    assert(n >= 0);
+    for (ssize_t at = 0; at < n; at += (ssize_t)strlen(names + at) + 1) {
+        assert(removexattr(path, names + at) == 0);
+    }
+}
+
+/** @brief The start-up folders' attributes dropped and loaded again from the
+ *  store, as at the next start. */
+static void restart_attributes(void)
+{
+    forget_attributes("/home");
+    forget_attributes("/home/.config/tracker/Desktop");
+    assert(surface_desktop_views_load() == 0);
+}
+
+/** @brief Extended attributes: kept on any node and moved with it; those of
+ *  the folders made at start are the store's views record, written an hour
+ *  after the last write and at quit, and loaded into a new tree. */
+static void test_attributes(void)
+{
+    char buf[64], list[64];
+    unsigned before;
+    int fd;
+
+    fake_reset();
+    test_now_us = 1000000u;
+    assert(surface_desktop_views_load() == 0);
+    fd = _open("/tmp/attr-a", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    assert(fd >= 0 && fsetxattr(fd, "user._trk/pinfo", "p1", 2, 0) == 0 && _close(fd) == 0);
+    assert(_rename("/tmp/attr-a", "/tmp/attr-b") == 0);
+    assert(getxattr("/tmp/attr-b", "user._trk/pinfo", buf, sizeof buf) == 2 && !memcmp(buf, "p1", 2));
+    assert(getxattr("/tmp/attr-b", "user._trk/pinfo", NULL, 0) == 2);
+    errno = 0;
+    assert(getxattr("/tmp/attr-b", "user._trk/pinfo", buf, 1) == -1 && errno == ERANGE);
+    errno = 0;
+    assert(getxattr("/tmp/attr-b", "user.none", buf, sizeof buf) == -1 && errno == ENODATA);
+    errno = 0;
+    assert(setxattr("/tmp/attr-b", "user._trk/pinfo", "p2", 2, XATTR_CREATE) == -1 && errno == EEXIST);
+    errno = 0;
+    assert(setxattr("/tmp/attr-b", "user.y", "p2", 2, XATTR_REPLACE) == -1 && errno == ENODATA);
+    assert(setxattr("/tmp/attr-b", "user.y", "", 0, 0) == 0 && listxattr("/tmp/attr-b", NULL, 0) == 23);
+    assert(listxattr("/tmp/attr-b", list, sizeof list) == 23 && !memcmp(list, "user.y\0user._trk/pinfo", 23));
+    assert(removexattr("/tmp/attr-b", "user.y") == 0);
+    errno = 0;
+    assert(removexattr("/tmp/attr-b", "user.y") == -1 && errno == ENODATA);
+    errno = 0;
+    assert(getxattr("/home/.config/TrackerSettings", "user.x", buf, sizeof buf) == -1 &&
+           errno == ENOTSUP);
+    errno = 0;
+    assert(getxattr("/tmp/none", "user.x", buf, sizeof buf) == -1 && errno == ENOENT);
+    assert(fake_find("ts/views") == NULL);
+
+    /* A start-up folder's change is written an hour after the last write;
+     * the next waits again, and quitting writes it. */
+    assert(setxattr("/home", "user._trk/columns", "c1", 2, 0) == 0 && fake_find("ts/views") == NULL);
+    test_now_us += 3600u * 1000000u;
+    assert(setxattr("/home/.config/tracker/Desktop", "user._trk/desk_columns", "d1", 2, 0) == 0);
+    assert(fake_has("ts/views", "c1") && fake_has("ts/views", "d1"));
+    assert(setxattr("/home", "user._trk/columns", "c2", 2, 0) == 0 && !fake_has("ts/views", "c2"));
+    assert(surface_desktop_views_save() == 0 && fake_has("ts/views", "c2"));
+    before = fake_publishes;
+    assert(surface_desktop_views_save() == 0 && fake_publishes == before);
+
+    /* At the next start the start-up folders' attributes load; other
+     * files' attributes are not in the record. */
+    assert(!fake_has("ts/views", "pinfo"));
+    restart_attributes();
+    assert(getxattr("/home", "user._trk/columns", buf, sizeof buf) == 2 && !memcmp(buf, "c2", 2));
+    assert(getxattr("/home/.config/tracker/Desktop", "user._trk/desk_columns", buf, sizeof buf) == 2);
+    assert(removexattr("/home", "user._trk/columns") == 0 && surface_desktop_views_save() == 0);
+    assert(!fake_has("ts/views", "c2") && fake_has("ts/views", "d1"));
+
+    /* A record cut short loads its whole entries; another file loads none. */
+    {
+        fake_file_t *f = fake_find("ts/views");
+
+        assert(f != NULL && f->len > 6);
+        f->len -= 1;
+        restart_attributes();
+        errno = 0;
+        assert(getxattr("/home/.config/tracker/Desktop", "user._trk/desk_columns", buf,
+                        sizeof buf) == -1 && errno == ENODATA);
+        f->len += 1;
+        restart_attributes();
+        assert(getxattr("/home/.config/tracker/Desktop", "user._trk/desk_columns", buf,
+                        sizeof buf) == 2);
+        memcpy(f->data, "TSV0", 4);
+        restart_attributes();
+        assert(listxattr("/home/.config/tracker/Desktop", NULL, 0) == 0);
+    }
+}
+
 int main(void)
 {
     DIR *d;
@@ -458,8 +572,10 @@ int main(void)
     }
 
     test_settings_store();
+    test_attributes();
     puts("posix layer: the home's note is seeded; directory streams outlive the "
          "entries they reach; files have no date while the clock is unset; "
-         "/Board reads through compat/posix; the settings files are the store's");
+         "/Board reads through compat/posix; the settings files are the store's; "
+         "the start-up folders' attributes are kept in the store");
     return 0;
 }
