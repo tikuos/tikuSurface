@@ -59,6 +59,10 @@ int surface_os_clock_state(void);
  *         stacks; 0, or -1 when refused.  Kernel owner only, before the
  *         desktop thread starts. */
 int surface_os_desktop_jobs_memory(void *memory, size_t bytes);
+/** @brief Give TikuOS's compat/posix store group @p bytes at @p memory for
+ *         the stages of the settings files it writes; 0, or -1 when refused.
+ *         Kernel owner only, before the desktop thread starts. */
+int surface_os_desktop_store_memory(void *memory, size_t bytes);
 /** @brief Make @p bytes at @p memory the C library's heap, through TikuOS's
  *         compat/posix heap group; 0, or -1 when refused.  Kernel owner
  *         only, before anything allocates. */

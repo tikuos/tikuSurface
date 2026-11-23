@@ -161,6 +161,8 @@ typedef struct {
     unsigned gen;       /* opens of this number so far */
     int busy;           /* a card request on it is outstanding */
     int wrote;          /* 0 unwritten, 1 its first write counted, 2 written since */
+    int stored;         /* a settings file's index + 1 when on the store, else 0 */
+    int stored_main;    /* the settings file itself, opened to write */
 } fd_t;
 static fd_t fds[FDS];
 
@@ -757,8 +759,9 @@ static int surface_desktop_files_locked(void)
         seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\nboard /Board vfs ro 0 0\n", 0644);
     }
     seed("/proc/partitions", "major minor  #blocks  name\n", 0644);
-    /* Thumbnails are deferred on the panel: no image codecs measured yet. */
-    seed("/home/.config/TrackerSettings", "GenerateImageThumbnails off\n", 0644);
+    /* /home/.config/TrackerSettings is in the store; its default, with
+     * thumbnails off (no image codec is measured on the panel), is seeded
+     * there at its first read (stored_copy()). */
     seed("/home/Documents/Welcome.txt",
          "TikuSurface runs TikuDesktop's shell on TikuOS.\n", 0644);
     /* The home is this tree: say so where files are saved. */
@@ -785,7 +788,7 @@ static void fd_fill(int fd, rnode_t *n, int flags, uint64_t reader)
 {
     unsigned gen = fds[fd].gen + 1u;
 
-    fds[fd] = (fd_t){ n, 0, flags, reader, gen, 0, 0 };
+    fds[fd] = (fd_t){ n, 0, flags, reader, gen, 0, 0, 0, 0 };
 }
 
 /** @brief Wait until no card request is outstanding on @p f, which @p gen
@@ -799,6 +802,229 @@ static int fd_idle(fd_t *f, unsigned gen)
     }
     return 0;
 }
+
+/*---------------------------------------------------------------------------*/
+/* THE SETTINGS IN THE STORE                                                 */
+/*---------------------------------------------------------------------------*/
+/* The desktop's settings files are files of TikuOS's file store, through
+ * compat/posix's store group: each path below, and the path with ".new" or
+ * ".tmp-" and six letters after it, names the store file its key gives with
+ * the same ending.  A descriptor on one holds store_device and keeps the
+ * library's descriptor in its reader field; the library's calls that publish
+ * wait, so the layer's lock is given back meanwhile.  Reads of a settings
+ * file itself come from a copy of its published content, loaded at its first
+ * read and again after the desktop publishes to it; a record the store is
+ * confirmed not to have is seeded with its default first. */
+typedef struct {
+    const char *path, *key, *seed;
+    rnode_t *copy;    /* the published content; NULL until loaded */
+} stored_t;
+static stored_t stored[] = {
+    { "/home/.config/TrackerSettings", "/data/ts/settings", "GenerateImageThumbnails off\n", NULL },
+    { "/home/.config/tracker/types", "/data/ts/types", NULL, NULL },
+    { "/home/.local/share/tracker/devices/local.state", "/data/ts/session", NULL, NULL },
+};
+#define STORED (sizeof stored / sizeof stored[0])
+static rnode_t store_device = { .name = "store", .mode = S_IFREG | 0644, .ino = 3 };
+
+/** @brief Whether the @p n bytes at @p s are lowercase letters and digits,
+ *  as fill_template() writes them. */
+static int template_letters(const char *s, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9'))) return 0;
+    }
+    return 1;
+}
+
+/** @brief For a settings file's path, or one with a store ending, its store
+ *  path in @p key, and in @p main whether it is the file itself.
+ *  @return the file's index, or -1 for any other path */
+static int stored_path(const char *path, char *key, size_t max, int *main)
+{
+    char full[PATH_MAX];
+    const char *p = under(path, "/home", full);
+
+    if (p == NULL) return -1;
+    for (unsigned i = 0; i < STORED; i++) {
+        size_t n = strlen(stored[i].path);
+        const char *end = p + n;
+
+        if (strncmp(p, stored[i].path, n) != 0) continue;
+        if (*end == '\0' || strcmp(end, ".new") == 0 ||
+            (strncmp(end, ".tmp-", 5) == 0 && strlen(end) == 11 && template_letters(end + 5, 6))) {
+            snprintf(key, max, "%s%s", stored[i].key, end);
+            if (main != NULL) *main = *end == '\0';
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+/** @brief Forget settings file @p i's copy; the next read loads it again.
+ *  A descriptor still reading the old copy keeps it until it closes. */
+static void stored_changed(unsigned i)
+{
+    rnode_t *copy = stored[i].copy;
+
+    stored[i].copy = NULL;
+    if (copy == NULL) return;
+    if (copy->opened) copy->unlinked = 1;
+    else node_free(copy);
+}
+
+/** @brief @p n when it is a settings file's copy, else NULL. */
+static rnode_t *stored_owner(const rnode_t *n)
+{
+    for (unsigned i = 0; i < STORED; i++) {
+        if (n != NULL && stored[i].copy == n) return stored[i].copy;
+    }
+    return NULL;
+}
+
+/** @brief Give back the layer's lock while the library's call waits; the
+ *  call's result, with its errno. */
+#define WITHOUT_LAYER(result, call) \
+    do { \
+        unsigned held_ = leave_all(); \
+        int errno_; \
+        (result) = (call); \
+        errno_ = errno; \
+        enter_again(held_); \
+        errno = errno_; \
+    } while (0)
+
+/** @brief Seed settings file @p i in the store with its default.
+ *  @return 0, or -1 with errno */
+static int stored_seed(unsigned i)
+{
+    int fd = tiku_posix_open(stored[i].key, O_CREAT | O_EXCL | O_WRONLY), r;
+    size_t n = strlen(stored[i].seed);
+
+    if (fd < 0) return errno == EEXIST ? 0 : -1;
+    if (tiku_posix_write(fd, stored[i].seed, n) != (ssize_t)n) {
+        int e = errno;
+        WITHOUT_LAYER(r, tiku_posix_close(fd));
+        errno = e;
+        return -1;
+    }
+    WITHOUT_LAYER(r, tiku_posix_close(fd));
+    return r;
+}
+
+/**
+ * @brief Settings file @p i's published content, loaded from the store into
+ *        a node outside the tree when it is not loaded; a missing record
+ *        with a default is seeded first.
+ * @return the copy, or NULL with errno: ENOENT for a record the store does
+ *         not have
+ */
+static rnode_t *stored_copy(unsigned i)
+{
+    struct stat st;
+    rnode_t *n;
+    int fd, seeded = 0;
+    size_t got = 0;
+
+    if (stored[i].copy != NULL) return stored[i].copy;
+    for (;;) {
+        fd = tiku_posix_open(stored[i].key, O_RDONLY);
+        if (fd >= 0 || errno != ENOENT || stored[i].seed == NULL || seeded) break;
+        if (stored_seed(i) != 0) return NULL;
+        seeded = 1;
+    }
+    if (fd < 0) return NULL;
+    n = calloc(1, sizeof *n);
+    if (n == NULL || tiku_posix_fstat(fd, &st) != 0 || reserve(n, (size_t)st.st_size + 1u) != 0) {
+        int e = n == NULL ? ENOMEM : errno;
+        if (n != NULL) node_free(n);
+        (void)tiku_posix_close(fd);
+        errno = e;
+        return NULL;
+    }
+    while (got < (size_t)st.st_size) {
+        ssize_t r = tiku_posix_read(fd, n->data + got, (size_t)st.st_size - got);
+        if (r <= 0) break;
+        got += (size_t)r;
+    }
+    (void)tiku_posix_close(fd);
+    if (got != (size_t)st.st_size) {
+        node_free(n);
+        errno = EIO;
+        return NULL;
+    }
+    snprintf(n->name, sizeof n->name, "%s", strrchr(stored[i].path, '/') + 1);
+    n->size = got;
+    n->mode = S_IFREG | 0644;
+    n->ino = next_ino++;
+    n->mtime = wall();
+    stored[i].copy = n;
+    return n;
+}
+
+/** @brief A store file's stat, on a device of its own (the tree's is 1,
+ *  /Card's 2, /Board's 3).  @return @p result */
+static int stored_stat(int result, struct stat *st)
+{
+    if (result == 0) st->st_dev = 4;
+    return result;
+}
+
+/** @brief Whether directory @p dir holds a settings file. */
+static int stored_parent(const rnode_t *dir)
+{
+    char parent[PATH_MAX];
+
+    for (unsigned i = 0; i < STORED; i++) {
+        size_t n = (size_t)(strrchr(stored[i].path, '/') - stored[i].path);
+        memcpy(parent, stored[i].path, n);
+        parent[n] = '\0';
+        if (lookup(parent) == dir) return 1;
+    }
+    return 0;
+}
+
+/** @brief Open a settings file or its temporary: a reader of the file
+ *  itself gets its copy; any other open, the library's descriptor.
+ *  @return the descriptor, or -1 with errno */
+static int stored_open(unsigned i, const char *key, int main, int flags)
+{
+    int write = (flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0;
+    int fd, s;
+    rnode_t *copy;
+
+    for (fd = FIRST_FD; fd < FDS && fds[fd].node != NULL; fd++) {
+    }
+    if (fd == FDS) {
+        errno = EMFILE;
+        return -1;
+    }
+    if (main && !write) {
+        copy = stored_copy(i);
+        if (copy == NULL) return -1;
+        fd_fill(fd, copy, flags, 0);
+        copy->opened++;
+        return fd;
+    }
+    s = tiku_posix_open(key, flags);
+    if (s < 0) return -1;
+    fd_fill(fd, &store_device, flags, (uint64_t)s);
+    fds[fd].stored = (int)i + 1;
+    fds[fd].stored_main = main && write;
+    return fd;
+}
+
+/** @brief Run the library's publishing call @p call on store descriptor
+ *  @p f, busy and without the layer's lock; a write to the file itself
+ *  forgets its copy.  @return the call's result, with its errno */
+#define STORED_WAIT(f, result, call) \
+    do { \
+        (f)->busy = 1; \
+        WITHOUT_LAYER(result, call); \
+        (f)->busy = 0; \
+        announce_change(); \
+        if ((f)->stored_main) stored_changed((unsigned)(f)->stored - 1u); \
+    } while (0)
 
 static int _open_locked(const char *path, int flags, int mode)
 {
@@ -817,6 +1043,12 @@ static int _open_locked(const char *path, int flags, int mode)
     }
     if (((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) && read_only_path(path))
         return -1;
+    {
+        char key[PATH_MAX];
+        int main = 0, i = stored_path(path, key, sizeof key, &main);
+
+        if (i >= 0) return stored_open((unsigned)i, key, main, flags);
+    }
     {
         char kernel[PATH_MAX];
 
@@ -890,6 +1122,14 @@ static int _close_locked(int fd)
     if (f->node == &board_device) {
         f->node = NULL;
         return tiku_posix_close((int)f->reader);
+    }
+    if (f->node == &store_device) {
+        int r;
+
+        STORED_WAIT(f, r, tiku_posix_close((int)f->reader));
+        if (r != 0 && errno == EAGAIN) return -1;      /* still open: nothing published */
+        f->node = NULL;
+        return r;
     }
     if (f->reader != 0) {
         uint64_t reader = f->reader;
@@ -988,6 +1228,17 @@ static _ssize_t read_at(int fd, void *buf, size_t n, const off_t *at)
         return -1;
     }
     if (f->node == &board_device) return tiku_posix_read((int)f->reader, buf, n);
+    if (f->node == &store_device) {
+        off_t keep;
+        _ssize_t got;
+
+        if (at == NULL) return tiku_posix_read((int)f->reader, buf, n);
+        keep = tiku_posix_lseek((int)f->reader, 0, SEEK_CUR);
+        if (keep < 0 || tiku_posix_lseek((int)f->reader, *at, SEEK_SET) < 0) return -1;
+        got = tiku_posix_read((int)f->reader, buf, n);
+        (void)tiku_posix_lseek((int)f->reader, keep, SEEK_SET);
+        return got;
+    }
     if (f->node == &random_device) {
         if (!random_seeded) {
             errno = EIO;
@@ -1043,6 +1294,7 @@ static _ssize_t _write_locked(int fd, const void *buf, size_t n)
         errno = EBADF;
         return -1;
     }
+    if (f->node == &store_device) return tiku_posix_write((int)f->reader, buf, n);
     at = (f->flags & O_APPEND) ? f->node->size : (size_t)f->pos;
     if (at > SIZE_MAX - n || reserve(f->node, at + n) != 0) return -1;
     memcpy(f->node->data + at, buf, n);
@@ -1067,7 +1319,8 @@ static off_t _lseek_locked(int fd, off_t offset, int whence)
     off_t base;
 
     if (f == NULL) return -1;
-    if (f->node == &board_device) return tiku_posix_lseek((int)f->reader, offset, whence);
+    if (f->node == &board_device || f->node == &store_device)
+        return tiku_posix_lseek((int)f->reader, offset, whence);
     base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? f->pos :
            whence == SEEK_END ? (off_t)f->node->size : -1;
     if (base < 0 || base + offset < 0) {
@@ -1090,6 +1343,7 @@ static int _fstat_locked(int fd, struct stat *st)
     f = fd_of(fd);
     if (f == NULL) return -1;
     if (f->node == &board_device) return board_stat(tiku_posix_fstat((int)f->reader, st), st);
+    if (f->node == &store_device) return stored_stat(tiku_posix_fstat((int)f->reader, st), st);
     fill_stat(f->node, st);
     return 0;
 }
@@ -1100,6 +1354,17 @@ static int _stat_locked(const char *path, struct stat *st)
     rnode_t *n;
 
     if (board_path(path, kernel, sizeof kernel)) return board_stat(tiku_posix_stat(kernel, st), st);
+    {
+        int main = 0, i = stored_path(path, kernel, sizeof kernel, &main);
+
+        if (i >= 0 && !main) return stored_stat(tiku_posix_stat(kernel, st), st);
+        if (i >= 0) {
+            n = stored_copy((unsigned)i);
+            if (n == NULL) return -1;
+            fill_stat(n, st);
+            return stored_stat(0, st);
+        }
+    }
     n = lookup(path);
     if (n == NULL) return -1;
     fill_stat(n, st);
@@ -1156,6 +1421,14 @@ static ssize_t pwrite_locked(int fd, const void *buf, size_t n, off_t offset)
     ssize_t put;
 
     if (f == NULL) return -1;
+    if (f->node == &store_device && !(f->flags & O_APPEND)) {
+        off_t keep = tiku_posix_lseek((int)f->reader, 0, SEEK_CUR);
+
+        if (keep < 0 || tiku_posix_lseek((int)f->reader, offset, SEEK_SET) < 0) return -1;
+        put = tiku_posix_write((int)f->reader, buf, n);
+        (void)tiku_posix_lseek((int)f->reader, keep, SEEK_SET);
+        return put;
+    }
     if (f->flags & O_APPEND) return _write(fd, buf, n);
     saved = f->pos;
     f->pos = offset;
@@ -1166,6 +1439,14 @@ static ssize_t pwrite_locked(int fd, const void *buf, size_t n, off_t offset)
 
 static int _unlink_locked(const char *path)
 {
+    char key[PATH_MAX];
+    int main = 0, i = stored_path(path, key, sizeof key, &main), r;
+
+    if (i >= 0) {
+        WITHOUT_LAYER(r, tiku_posix_unlink(key));
+        if (main) stored_changed((unsigned)i);
+        return r;
+    }
     if (read_only_path(path)) return -1;
     rnode_t *n = lookup(path);
 
@@ -1199,6 +1480,20 @@ static int is_ancestor(const rnode_t *a, const rnode_t *n)
 
 static int _rename_locked(const char *old, const char *new)
 {
+    char ka[PATH_MAX], kb[PATH_MAX];
+    int ma = 0, mb = 0, r;
+    int ia = stored_path(old, ka, sizeof ka, &ma), ib = stored_path(new, kb, sizeof kb, &mb);
+
+    if (ia >= 0 || ib >= 0) {
+        if (ia < 0 || ib < 0) {
+            errno = EXDEV;          /* the store and the tree are two file systems */
+            return -1;
+        }
+        WITHOUT_LAYER(r, tiku_posix_rename(ka, kb));
+        if (ma) stored_changed((unsigned)ia);
+        if (mb) stored_changed((unsigned)ib);
+        return r;
+    }
     if (read_only_path(old) || read_only_path(new)) return -1;
     rnode_t *from = lookup(old), *parent = NULL, *to;
     const char *leaf;
@@ -1322,6 +1617,14 @@ static int access_locked(const char *path, int mode)
         }
         return 0;
     }
+    if (stored_path(path, kernel, sizeof kernel, NULL) >= 0) {
+        if (_stat_locked(path, &st) != 0) return -1;
+        if (mode & X_OK) {
+            errno = EACCES;
+            return -1;
+        }
+        return 0;
+    }
     n = lookup(path);
     if (n == NULL) return -1;
     if (((mode & R_OK) && !(n->mode & S_IRUSR)) || ((mode & W_OK) && !(n->mode & S_IWUSR)) ||
@@ -1359,6 +1662,21 @@ static char *getcwd_locked(char *buf, size_t size)
 
 static char *realpath_locked(const char *path, char *resolved)
 {
+    char key[PATH_MAX], full[PATH_MAX];
+    struct stat st;
+
+    if (stored_path(path, key, sizeof key, NULL) >= 0) {
+        const char *at = under(path, "/home", full);
+        char *out = resolved;
+
+        if (_stat_locked(path, &st) != 0) return NULL;
+        if (out == NULL && (out = malloc(PATH_MAX)) == NULL) {
+            errno = ENOMEM;
+            return NULL;
+        }
+        snprintf(out, PATH_MAX, "%s", at);
+        return out;
+    }
     rnode_t *n = lookup(path), *chain[64];
     int depth = 0;
     char *out = resolved;
@@ -1401,8 +1719,22 @@ int symlink(const char *target, const char *path)
     return -1;
 }
 
+/** @brief A store file keeps mode 0644: that mode is accepted, another
+ *  refused with EPERM. */
+static int stored_mode(mode_t mode)
+{
+    if ((mode & 07777) == 0644) return 0;
+    errno = EPERM;
+    return -1;
+}
+
 static int chmod_locked(const char *path, mode_t mode)
 {
+    char key[PATH_MAX];
+    struct stat st;
+
+    if (stored_path(path, key, sizeof key, NULL) >= 0)
+        return _stat_locked(path, &st) != 0 ? -1 : stored_mode(mode);
     if (read_only_path(path)) return -1;
     rnode_t *n = lookup(path);
 
@@ -1416,6 +1748,8 @@ static int fchmod_locked(int fd, mode_t mode)
 {
     fd_t *f = fd_of(fd);
 
+    if (f != NULL && (f->node == &store_device || f->node == stored_owner(f->node)))
+        return stored_mode(mode);
     if (f != NULL && f->node->card != NULL) {
         errno = EROFS;
         return -1;
@@ -1430,12 +1764,41 @@ static int fchmod_locked(int fd, mode_t mode)
 static int chown_locked(const char *path, uid_t uid, gid_t gid) { (void)uid; (void)gid; return lookup(path) ? 0 : -1; }
 int lchown(const char *path, uid_t uid, gid_t gid) { return chown(path, uid, gid); }
 mode_t umask(mode_t mask) { (void)mask; return 022; }
-static int fsync_locked(int fd) { return (fd >= 0 && fd < FIRST_FD) || fd_of(fd) ? 0 : -1; }
+/**
+ * @brief A store descriptor publishes its writes; a directory holding a
+ *        settings file is synced as the store's directory, 0 while the store
+ *        is mounted, since a rename returns once it is durable.
+ */
+static int fsync_locked(int fd)
+{
+    fd_t *f;
+    int r = 0, d;
+
+    if (fd >= 0 && fd < FIRST_FD) return 0;
+    f = fd_of(fd);
+    if (f == NULL) return -1;
+    if (f->node == &store_device) {
+        if (fd_idle(f, f->gen) != 0) return -1;
+        STORED_WAIT(f, r, tiku_posix_fsync((int)f->reader));
+        return r;
+    }
+    if (S_ISDIR(f->node->mode) && stored_parent(f->node)) {
+        d = tiku_posix_open("/data", O_RDONLY);
+        if (d < 0) return -1;
+        r = tiku_posix_fsync(d);
+        (void)tiku_posix_close(d);
+    }
+    return r;
+}
 
 static int ftruncate_locked(int fd, off_t length)
 {
     fd_t *f = fd_of(fd);
 
+    if (f != NULL && (f->node == &store_device || f->node == stored_owner(f->node))) {
+        errno = EINVAL;             /* a store file is truncated by O_TRUNC */
+        return -1;
+    }
     if (f != NULL && f->node->card != NULL) {
         errno = EROFS;
         return -1;
@@ -1549,7 +1912,7 @@ static int mkstemps_locked(char *tmpl, int suffix)
     for (tries = 0; tries < 100; tries++) {
         strcpy(tmpl, saved);
         if (fill_template(tmpl, (size_t)suffix) != 0) return -1;
-        fd = open(tmpl, O_RDWR | O_CREAT | O_EXCL, 0600);
+        fd = _open(tmpl, O_RDWR | O_CREAT | O_EXCL, 0600);
         if (fd >= 0 || errno != EEXIST) return fd;
     }
     errno = EEXIST;

@@ -26,4 +26,8 @@ void tiku_posix_rewinddir(DIR *dir);
 int tiku_posix_closedir(DIR *dir);
 int tiku_posix_is_dir_stream(const DIR *dir);
 uint8_t tiku_posix_authority_set(uint8_t cap);
+ssize_t tiku_posix_write(int fd, const void *buf, size_t n);
+int tiku_posix_fsync(int fd);
+int tiku_posix_rename(const char *from, const char *to);
+int tiku_posix_unlink(const char *path);
 #endif

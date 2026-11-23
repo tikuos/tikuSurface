@@ -32,6 +32,7 @@ describes.
 | Mutexes, condition variables, the C library's locks | TikuOS's `compat/posix` threads group: `pthread_mutex_*`, `pthread_cond_*` and newlib's stream, environment and time-zone locks on kernel wait queues | Linked with the library; `desktop/posix.c` defines none; the status line's `locks=` shows their use | Desktop and job threads | Call |
 | The kernel's namespace, read | `/Board` in the desktop's tree: `compat/posix`'s read group over `tiku_vfs_read_at` and `tiku_vfs_list`, each call on the kernel thread through `tiku_thread_call` | `desktop/posix.c` routes `/Board` paths to `tiku_posix_*`; changes are refused with `EROFS` | Desktop thread | Call |
 | Touch calibration | File store record `tikusurface-cal-v1` in `/data` | `platform/tikuos/settings_io.c` | Owner turn | Durable |
+| Desktop settings and session state | TikuOS's `compat/posix` store group over the file store: `TrackerSettings`, `tracker/types` and `devices/local.state` are `/data/ts/settings`, `ts/types` and `ts/session`, their temporaries the key with the same ending; written through 16 KiB stages from the runtime's arena and published by `fsync`, `close` and `rename` | `desktop/posix.c` routes the paths and reads each file from a copy of its published content; `surface_os_desktop_store_memory()` | Desktop and job threads | Durable |
 | Random source | `tiku_trng_arch_read_bytes` | `surface_os_desktop_random()` | Desktop thread | Seed |
 | Console output | `tiku_console_write` | `surface_os_desktop_print()` | Owner turn | Line |
 | Diagnostics | VFS nodes under `/surface` | `platform/tikuos/diagnostics.c` | Owner turn | Until restart |
@@ -41,7 +42,7 @@ describes.
 | Facility | Product code | Why it is here | Kernel provider to use |
 | --- | --- | --- | --- |
 | Files, directories, descriptors | A tree in the desktop's heap, `desktop/posix.c`, under one lock that a card request gives back while it waits | Stomme and newlib call POSIX; the tree is lost at every restart | The VFS, `/data` and the media store, through a POSIX library in TikuOS |
-| Desktop settings and per-file state | Files in that tree: `TrackerSettings`, `tracker/types`, `devices/local.state` | As above; lost at every restart | `/data` |
+| Per-file view state | Extended attributes, which Stomme compiles out on the S31, so a folder's columns are not kept | No attribute store on the board | A `ts/views` record in `/data` |
 | Random numbers for the desktop | SHA-256 in counter mode over a TRNG seed, `desktop/posix.c` | `/dev/urandom` for the desktop's tree | Stays with the file layer |
 | Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash; the desktop and job threads take turns on the card's, and the job thread's card request is polled at full rate only while the desktop thread is blocked with no frame waiting | Written before the kernel had a path for a worker's request; `/Board` reads use the kernel's | `tiku_thread_call` |
 | Change notices | A counter of tree changes the desktop polls, `tiku_posix_mutations()`; a descriptor's writes count at its first write and at its close | Changes happen only in the desktop's own tree; any change re-lists every open folder view | `tiku_vfs_watch` and the VFS change ring |

@@ -52,6 +52,11 @@ TIKU_POSIX_HEAP := 1
 # desktop.mk); the desktop's mutexes and conditions, its kits' among them,
 # fit the tables with room to spare, and the status line shows their use.
 APPL_CFLAGS += -DTIKU_POSIX_THREADS=1 -DTIKU_POSIX_MUTEXES=32 -DTIKU_POSIX_CONDS=16
+# The settings files are files of the kernel's file store through the
+# library's store group (desktop/posix.c), each through a stage of 16 KiB
+# in the runtime's arena: Stomme's session file is 2-4 KiB.
+TIKU_POSIX_STORE := 1
+APPL_CFLAGS += -DTIKU_POSIX_STAGE_MAX=16384u
 APPL_EXTRA_OBJS := $(S31_DIR)/tikuSurface/surface-ui.o
 APPL_LINKER := $(S31_DIR)/surface.ld
 S31_LDFLAGS += -Wl,-u,tiku_application_stop,-u,surface_runtime_launch,-u,surface_runtime_fail_at

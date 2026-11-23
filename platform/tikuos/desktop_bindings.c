@@ -129,6 +129,12 @@ int surface_os_desktop_jobs_memory(void *memory, size_t bytes)
     return tiku_posix_thread_memory(memory, bytes) == 0 ? 0 : -1;
 }
 
+int surface_os_desktop_store_memory(void *memory, size_t bytes)
+{
+    if (!tiku_thread_in_kernel()) return -1;
+    return tiku_posix_store_memory(memory, bytes) == 0 ? 0 : -1;
+}
+
 int surface_os_desktop_heap_memory(void *memory, size_t bytes)
 {
     if (!tiku_thread_in_kernel()) return -1;

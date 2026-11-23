@@ -171,15 +171,33 @@ int surface_os_desktop_random(void *bytes, size_t length) { memset(bytes, 7, len
 int surface_os_clock_state(void) { return SURFACE_CLOCK_SET; }
 void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
 
-/* No /Board here: every library call finds nothing. */
-int tiku_posix_open(const char *path, int flags) { (void)path; (void)flags; errno = ENOENT; return -1; }
-ssize_t tiku_posix_read(int fd, void *buf, size_t n) { (void)fd; (void)buf; (void)n; errno = EBADF; return -1; }
-off_t tiku_posix_lseek(int fd, off_t offset, int whence) { (void)fd; (void)offset; (void)whence; errno = EBADF; return -1; }
-int tiku_posix_close(int fd) { (void)fd; errno = EBADF; return -1; }
+/* No /Board here; /data is the fake store, whose publications wait while
+ * the test holds STORE_OP, as the library's wait for the flash would. */
+#include "fake_store.h"
+#define STORE_OP 31u
+static void store_waits(void)
+{
+    pthread_mutex_lock(&card);
+    waiting++;
+    pthread_cond_broadcast(&card_moved);
+    while (held_ops & (1u << STORE_OP)) pthread_cond_wait(&card_moved, &card);
+    waiting--;
+    pthread_mutex_unlock(&card);
+}
+int tiku_posix_open(const char *path, int flags)
+{ if (fake_path(path)) return fake_open(path, flags); errno = ENOENT; return -1; }
+ssize_t tiku_posix_read(int fd, void *buf, size_t n) { return fake_read(fd, buf, n); }
+off_t tiku_posix_lseek(int fd, off_t offset, int whence) { return fake_lseek(fd, offset, whence); }
+int tiku_posix_close(int fd) { return fake_close(fd); }
 int tiku_posix_fcntl(int fd, int cmd) { (void)fd; (void)cmd; errno = EBADF; return -1; }
-int tiku_posix_fstat(int fd, struct stat *st) { (void)fd; (void)st; errno = EBADF; return -1; }
-int tiku_posix_stat(const char *path, struct stat *st) { (void)path; (void)st; errno = ENOENT; return -1; }
-int tiku_posix_is_open(int fd) { (void)fd; return 0; }
+int tiku_posix_fstat(int fd, struct stat *st) { return fake_fstat(fd, st); }
+int tiku_posix_stat(const char *path, struct stat *st)
+{ if (fake_path(path)) return fake_stat(path, st); errno = ENOENT; return -1; }
+int tiku_posix_is_open(int fd) { return fake_slot(fd) != NULL; }
+ssize_t tiku_posix_write(int fd, const void *buf, size_t n) { return fake_write(fd, buf, n); }
+int tiku_posix_fsync(int fd) { return fake_fsync(fd); }
+int tiku_posix_rename(const char *from, const char *to) { return fake_rename(from, to); }
+int tiku_posix_unlink(const char *path) { return fake_unlink(path); }
 DIR *tiku_posix_opendir(const char *path) { (void)path; errno = ENOENT; return NULL; }
 struct dirent *tiku_posix_readdir(DIR *dir) { (void)dir; return NULL; }
 void tiku_posix_rewinddir(DIR *dir) { (void)dir; }
@@ -259,6 +277,22 @@ static int bytes_are(const unsigned char *buf, size_t n, unsigned o, uint64_t at
         if (buf[i] != byte_of(o, at + i)) return 0;
     }
     return 1;
+}
+
+int mkstemp(char *tmpl);
+int _rename(const char *old, const char *new);
+
+/* A save of a settings file through a temporary, as Stomme's is. */
+static void *saves(void *arg)
+{
+    job_t *j = arg;
+    char tmp[64] = "/home/.config/TrackerSettings.tmp-XXXXXX";
+    int fd = mkstemp(tmp);
+
+    j->got = fd >= 0 && _write(fd, "DarkMode 1\n", 11) == 11 && fsync(fd) == 0 &&
+             _close(fd) == 0 && _rename(tmp, "/home/.config/TrackerSettings") == 0;
+    __atomic_store_n(&j->done, 1, __ATOMIC_SEQ_CST);
+    return NULL;
 }
 
 int main(void)
@@ -344,8 +378,33 @@ int main(void)
         assert(two.got == 1024 && bytes_are(two.buf, 1024u, 2u, 0u));
         assert(_close(one.fd) == 0 && _close(two.fd) == 0);
     }
+    /* While one thread's save of a settings file waits for the store,
+     * another reads that file through the layer. */
+    {
+        static job_t s;
+        unsigned char buf[64];
+        int fd;
+        ssize_t n;
+
+        fake_reset();
+        fd = _open("/home/.config/TrackerSettings", O_RDONLY, 0);
+        assert(fd >= 0 && _close(fd) == 0);
+        fake_during = store_waits;
+        hold(STORE_OP);
+        pthread_create(&a, NULL, saves, &s);
+        await_waiting(1);
+        fd = _open("/home/.config/TrackerSettings", O_RDONLY, 0);
+        n = fd >= 0 ? _read(fd, buf, sizeof buf) : -1;
+        assert(n == 28 && _close(fd) == 0 && !done(&s));
+        let_go(STORE_OP);
+        pthread_join(a, NULL);
+        assert(s.got == 1);
+        fake_during = NULL;
+        assert(fake_holds("ts/settings", "DarkMode 1\n"));
+    }
     assert(card_value(&waiting) == 0u);
     printf("posix threads: a listing is shared, the tree is free during a card read, "
-           "a close waits for its descriptor's read, a file's first bytes are kept once\n");
+           "a close waits for its descriptor's read, a file's first bytes are kept once, "
+           "a settings file reads while its save waits\n");
     return 0;
 }

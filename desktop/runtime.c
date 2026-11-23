@@ -46,6 +46,9 @@
  * it.  Painted as the desktop's is; the status line reports its deepest
  * use. */
 #define JOBS_BYTES (384u * 1024u)
+/* Stages for the settings files the store group writes: three, so a save's
+ * temporary, the session file's and a direct writer each have one. */
+#define STAGES_BYTES (3u * 16384u)
 #define STACK_SCAN_WORDS 4096u   /* words examined per turn for the high-water mark */
 #define SAMPLE_SLOTS 4096u       /* program counters kept, one per kernel turn */
 #define SAMPLE_LINE 48u          /* samples printed per turn by the dump */
@@ -908,7 +911,7 @@ static void desktop_thread(void *arg)
 
 int surface_runtime_start(void)
 {
-    unsigned char *span, *stack, *jobs, *heap;
+    unsigned char *span, *stack, *jobs, *stages, *heap;
     unsigned char record[SURFACE_SETTINGS_BYTES];
     size_t length = 0;
 
@@ -925,15 +928,17 @@ int surface_runtime_start(void)
     rt.rgb[1] = (uint16_t *)(span + RGB_BYTES);
     stack = span + 2u * RGB_BYTES;
     jobs = stack + STACK_BYTES;
-    heap = jobs + JOBS_BYTES;
+    stages = jobs + JOBS_BYTES;
+    heap = stages + STAGES_BYTES;
     rt.stack = (uint32_t *)(void *)stack;
     for (uint32_t i = 0; i < STACK_BYTES / 4u; i++) rt.stack[i] = STACK_PAINT;
     rt.jobs = (uint32_t *)(void *)jobs;
     for (uint32_t i = 0; i < JOBS_BYTES / 4u; i++) rt.jobs[i] = STACK_PAINT;
     memset(rt.rgb[0], 0, 2u * RGB_BYTES);
     if (surface_os_desktop_heap_memory(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES -
-                                       JOBS_BYTES) != 0 ||
-        surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0) {
+                                       JOBS_BYTES - STAGES_BYTES) != 0 ||
+        surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0 ||
+        surface_os_desktop_store_memory(stages, STAGES_BYTES) != 0) {
         rt.failed = 1;
         return 0;
     }
