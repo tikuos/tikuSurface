@@ -9,14 +9,16 @@ settings bindings of the LCD runtime.
 From the matching TikuOS root, with TikuSurface at `tikuSurface/`:
 
 ```sh
-make MCU=esp32s31 S31_PROFILE=s31-local S31_SURFACE_LCD=1 S31_CPU_MHZ=160 \
+make MCU=esp32s31 S31_PROFILE=s31-local S31_SURFACE_LCD=1 S31_CPU_MHZ=320 \
     S31_APPLICATION_MANIFEST=tikuSurface/product/tikuos.mk \
     SURFACE_NATIVE_DESKTOP=1 S31_DIR=build/desktop-native-local \
     DESKTOP_ASSETS=/path/to/TikuDesktop \
     CROSS_COMPILE=/path/to/riscv32-esp-elf- PYTHON=/path/to/venv/bin/python all
 ```
 
-The build refuses to start without `S31_SURFACE_LCD=1` and `S31_CPU_MHZ=160`.
+The build refuses to start without `S31_SURFACE_LCD=1` and `S31_CPU_MHZ` of
+160 or 320. At 320 MHz a tap takes a median 136 ms idle and 158 ms while a
+card copy runs (160 ms and 286 ms at 160 MHz).
 After the link, `tools/desktop_placement.py` checks where the desktop's code
 and statics landed, and `tools/libc_stubs.py` reads the link map for system
 calls taken from libnosys, whose definitions set `errno` to `ENOSYS`; a call

@@ -44,8 +44,8 @@ $(error SURFACE_DESKTOP must be 0 or 1)
 endif
 ifeq ($(SURFACE_DESKTOP),1)
 ifeq ($(S31_SURFACE_LCD),1)
-ifneq ($(S31_CPU_MHZ),160)
-$(error The core LCD desktop requires S31_CPU_MHZ=160)
+ifeq ($(filter $(S31_CPU_MHZ),160 320),)
+$(error The core LCD desktop requires S31_CPU_MHZ=160 or 320)
 endif
 endif
 ifneq ($(SURFACE_DIRECTORIES)$(SURFACE_FILE_INFO),11)

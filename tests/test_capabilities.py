@@ -18,4 +18,4 @@ class CapabilityTests(unittest.TestCase):
         limits = manifest['development_profiles']['core-desktop']['limits']
         self.assertEqual(rows, [(str(limits['paint_rows']), str(manifest['firmware_lcd']['paint_rows']))])
         self.assertEqual(limits['cpu_mhz'], 160)
-        self.assertIn('ifneq ($(S31_CPU_MHZ),160)', (ROOT / 'product/tikuos.mk').read_text())
+        self.assertIn('ifeq ($(filter $(S31_CPU_MHZ),160 320),)', (ROOT / 'product/tikuos.mk').read_text())

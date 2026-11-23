@@ -7,8 +7,8 @@
 ifneq ($(S31_SURFACE_LCD),1)
 $(error SURFACE_NATIVE_DESKTOP requires S31_SURFACE_LCD=1)
 endif
-ifneq ($(S31_CPU_MHZ),160)
-$(error SURFACE_NATIVE_DESKTOP requires S31_CPU_MHZ=160)
+ifeq ($(filter $(S31_CPU_MHZ),160 320),)
+$(error SURFACE_NATIVE_DESKTOP requires S31_CPU_MHZ=160 or 320)
 endif
 comma := ,
 DESKTOP_BUILD := $(S31_DIR)/desktop

@@ -37,16 +37,18 @@ From the matching TikuOS root, with the product at `tikuSurface/`:
 ```sh
 make MCU=esp32s31 S31_PROFILE=s31-local S31_SURFACE_LCD=1 \
     S31_APPLICATION_MANIFEST=tikuSurface/product/tikuos.mk \
-    S31_DIR=build/surface-core-local S31_CPU_MHZ=160 \
+    S31_DIR=build/surface-core-local S31_CPU_MHZ=320 \
     CROSS_COMPILE=/path/to/riscv32-esp-elf- PYTHON=/path/to/venv/bin/python \
     SURFACE_SDK=/path/to/s31-sdk \
     SURFACE_DESKTOP=1 SURFACE_TEXT_INPUT=1 SURFACE_FILE_JOBS=1 \
     SURFACE_CONTENT_JOBS=1 SURFACE_FILE_INFO=1 SURFACE_DIRECTORIES=1
 ```
 
-The LCD core requires `S31_CPU_MHZ=160`. CPU and memory run at 160 MHz,
-the system bus at 80 MHz and APB at 40 MHz. The clock transition uses the
-CPLL initialized by the 80 MHz PSRAM backend.
+The LCD core requires `S31_CPU_MHZ=160` or `320`. At 320 the CPU runs at
+320 MHz, memory at 160 MHz, the system bus at 106.7 MHz and APB at 53.3 MHz;
+at 160, CPU and memory at 160 MHz, the system bus at 80 MHz and APB at
+40 MHz. Both run from the CPLL initialized by the 80 MHz PSRAM backend, and
+the console's `freq <mhz>` changes the rate while the desktop runs.
 
 `cat /surface/timing` reports paint-to-handoff microseconds, the maximum since
 start, completed foreground identity, completed-frame count and pending work.
