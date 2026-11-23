@@ -11,11 +11,17 @@
  * @brief Submit refuses BUSY/error without retention; poll error proves DMA retirement.
  * @note amend makes pixels changed in place in the buffer on show visible; it
  * is called only between submissions. Without it no touch mark is drawn.
+ * convert, when present, starts converting a part of the view into the back
+ * buffer in hardware (0 started, -1 refused) and convert_poll reports it (1
+ * running, 0 done, -1 failed); after a refusal or failure the CPU converts
+ * the rest of the frame.
  */
 typedef struct {
     tiku_present_result_t (*submit)(void *, unsigned, tiku_rect_t, uint64_t);
     tiku_present_result_t (*poll)(void *, uint64_t);
     int (*amend)(void *, unsigned, tiku_rect_t);
+    int (*convert)(void *, unsigned, const tiku_present_view_t *, tiku_rect_t);
+    int (*convert_poll)(void *);
 } surface_scanout_ops_t;
 
 /** @brief Rectangles a scanout buffer keeps apart while each pair's union
@@ -40,6 +46,7 @@ typedef struct {
     void *context;
     uint64_t *sequence, ticket;
     unsigned front, phase, failed, x, y, pixel_budget, part;
+    unsigned hw, cpu;      /* a hardware conversion runs; the CPU converts */
     uint32_t convert_px;
     int mark_on, mark_x, mark_y;
     unsigned mark_seq, drawn[2];

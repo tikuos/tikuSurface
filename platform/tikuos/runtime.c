@@ -289,7 +289,7 @@ int surface_runtime_start(void)
     state->fail_at = failure_at;
     runtime = state;
 #if SURFACE_LCD_ENABLE
-    static const surface_scanout_ops_t scanout_ops = {scanout_submit, scanout_poll, NULL};
+    static const surface_scanout_ops_t scanout_ops = {scanout_submit, scanout_poll, NULL, NULL, NULL};
     for (unsigned i = 0; i < 2; ++i) {
         state->scanout[i] = allocate(state, SURFACE_SCANOUT_BYTES, 64);
         if (!state->scanout[i]) goto fail;

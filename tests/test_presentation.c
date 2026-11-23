@@ -36,7 +36,7 @@ static tiku_present_result_t submit(void *context, unsigned index, tiku_rect_t r
 /** @brief Return a controlled completion only for the submitted transport ticket. */
 static tiku_present_result_t poll(void *context, uint64_t token)
 { (void)context; assert(token == submitted); return completion_result; }
-static const surface_scanout_ops_t ops = {submit, poll, NULL};
+static const surface_scanout_ops_t ops = {submit, poll, NULL, NULL, NULL};
 
 /** @brief Fill a rectangle from an independent input/expected-output color pair. */
 static void color(tiku_rect_t r, uint32_t input, uint16_t output)
@@ -115,7 +115,7 @@ static tiku_rect_t amended;
 /** @brief Record which pixels of the buffer on show were changed in place. */
 static int amend(void *context, unsigned index, tiku_rect_t r)
 { (void)context; ++amends; amended_buffer = index; amended = r; return 1; }
-static const surface_scanout_ops_t marking = {submit, poll, amend};
+static const surface_scanout_ops_t marking = {submit, poll, amend, NULL, NULL};
 
 /** @brief Whether two rectangles are the same. */
 static int same(tiku_rect_t a, tiku_rect_t b)
@@ -289,9 +289,114 @@ static void layouts_and_retries(void)
     assert(tiku_framebuffer_destroy(&frame) && !host.memory.live);
 }
 
+/* A hardware converter: it converts a part at once but reports it running
+ * for `runs` polls; it may refuse, or fail after writing garbage. */
+static unsigned hw_calls, hw_runs, hw_left, hw_refuse, hw_fail, hw_polls;
+static tiku_rect_t hw_parts[4];
+
+static int hw_convert(void *context, unsigned back, const tiku_present_view_t *v, tiku_rect_t r)
+{
+    (void)context;
+    if (hw_calls < 4) hw_parts[hw_calls] = r;
+    hw_calls++;
+    if (hw_refuse) return -1;
+    for (int y = r.y; y < r.y + r.h; ++y) for (int x = r.x; x < r.x + r.w; ++x) {
+        uint32_t c = ((const uint32_t *)((const unsigned char *)v->pixels + y * v->stride))[x];
+        scanout[back][y * 800 + x] = hw_fail ? 0xbeef : (uint16_t)(((c >> 8) & 0xf800u) |
+            ((c >> 5) & 0x07e0u) | ((c >> 3) & 0x001fu));
+    }
+    hw_left = hw_runs;
+    return 0;
+}
+
+static int hw_poll(void *context)
+{
+    (void)context;
+    hw_polls++;
+    if (hw_left) { hw_left--; return 1; }
+    return hw_fail ? -1 : 0;
+}
+
+static const surface_scanout_ops_t hardware_ops = {submit, poll, NULL, hw_convert, hw_poll};
+
+/** @brief One frame of @p r over a full first frame, through the hardware
+ *  converter: the polls until the transport is given it. */
+static unsigned hw_frame(surface_presentation_t *p, tiku_framebuffer_t *frame,
+                         tiku_presenter_t presenter, tiku_rect_t r, uint32_t in, uint16_t out)
+{
+    unsigned polls;
+
+    assert(tiku_framebuffer_begin(frame, &r));
+    color(r, in, out);
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_OK);
+    polls = convert(p);
+    assert(!memcmp(scanout[target], expected, sizeof expected));
+    completion_result = TIKU_PRESENT_OK;
+    assert(surface_presentation_poll(p) == TIKU_PRESENT_OK);
+    completion_result = TIKU_PRESENT_BUSY;
+    return polls;
+}
+
+/** @brief Parts go to the hardware converter one at a time; a refusal or a
+ *  failure leaves the frame to the CPU, which converts it whole. */
+static void hardware(void)
+{
+    surface_host_t host;
+    surface_config_t config = surface_host_config(&host);
+    tiku_framebuffer_t *frame = tiku_framebuffer_borrow(config.allocator, pixels, sizeof pixels, 800, 480);
+    tiku_presenter_t presenter;
+    surface_presentation_t p;
+    unsigned polls;
+
+    sequence = 0; submits = 0;
+    submission_result = TIKU_PRESENT_OK; completion_result = TIKU_PRESENT_BUSY;
+    for (unsigned i = 0; i < 800 * 480; ++i) { pixels[i] = 0x00ffffff; expected[i] = 0xffff; }
+    assert(surface_presentation_init(&p, scanout[0], sizeof scanout[0], scanout[1], sizeof scanout[1],
+        0, 64, &sequence, &hardware_ops, NULL));
+    presenter = (tiku_presenter_t){surface_presentation_submit, &p};
+    /* The first frame is the whole screen, in one part. */
+    hw_runs = 3;
+    polls = hw_frame(&p, frame, presenter, (tiku_rect_t){0, 0, 800, 480}, 0x00ffffff, 0xffff);
+    assert(hw_calls == 1 && hw_parts[0].w == 800 && hw_parts[0].h == 480 && polls <= 6);
+    hw_frame(&p, frame, presenter, (tiku_rect_t){0, 0, 800, 480}, 0x00ffffff, 0xffff);
+    /* Two far-apart parts: two jobs, each started at its own corner. */
+    hw_calls = 0;
+    polls = hw_frame(&p, frame, presenter, (tiku_rect_t){3, 7, 5, 3}, 0x00ff0000, 0xf800);
+    assert(hw_calls == 1);
+    hw_calls = 0;
+    color((tiku_rect_t){3, 7, 5, 3}, 0x00ff0000, 0xf800);
+    polls = hw_frame(&p, frame, presenter, (tiku_rect_t){780, 450, 19, 29}, 0x0000ff00, 0x07e0);
+    assert(hw_calls == 2 && hw_parts[0].x == 3 && hw_parts[0].y == 7 &&
+           hw_parts[1].x == 780 && hw_parts[1].y == 450 && polls <= 10);
+    /* Refused: the CPU converts the frame's two parts, 64 pixels a poll. */
+    hw_frame(&p, frame, presenter, (tiku_rect_t){0, 0, 64, 10}, 0x000000ff, 0x001f);
+    hw_refuse = 1;
+    hw_calls = 0;
+    polls = hw_frame(&p, frame, presenter, (tiku_rect_t){200, 300, 64, 10}, 0x00ffff00, 0xffe0);
+    assert(hw_calls == 1 && polls >= 20);
+    hw_refuse = 0;
+    /* Failed after writing garbage: the CPU converts the part again. */
+    hw_fail = 1;
+    hw_calls = 0;
+    polls = hw_frame(&p, frame, presenter, (tiku_rect_t){100, 100, 64, 10}, 0x00ff00ff, 0xf81f);
+    assert(hw_calls == 1 && polls >= 10);
+    hw_fail = 0;
+    /* Closed while a job runs: it is waited for first. */
+    hw_runs = 5;
+    assert(tiku_framebuffer_begin(frame, &(tiku_rect_t){0, 0, 8, 8}));
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_OK);
+    assert(surface_presentation_poll(&p) == TIKU_PRESENT_BUSY && p.hw);
+    hw_polls = 0;
+    assert(surface_presentation_closed(&p));
+    assert(!p.hw && hw_polls >= 5);
+    assert(p.failed && tiku_framebuffer_begin(frame, NULL));
+    assert(tiku_framebuffer_abandon(frame));
+    assert(tiku_framebuffer_destroy(&frame) && !host.memory.live);
+}
+
 int main(void)
 {
-    frames(); refusals_and_errors(); layouts_and_retries(); marks();
-    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases, faults and touch marks passed");
+    frames(); refusals_and_errors(); layouts_and_retries(); marks(); hardware();
+    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases, faults, touch marks and the hardware converter passed");
     return 0;
 }

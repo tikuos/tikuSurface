@@ -23,6 +23,20 @@ int surface_os_display_submit(unsigned back, unsigned x, unsigned y,
  */
 int surface_os_display_amend(unsigned buffer, unsigned x, unsigned y,
     unsigned w, unsigned h);
+/**
+ * @brief Start converting the @p w x @p h rectangle at (@p x, @p y) of an
+ *        800 x 480 XRGB8888 view with rows of @p stride bytes into the same
+ *        rectangle of back buffer @p back, by the S31's PPA.
+ * @return SURFACE_SCANOUT_OK once running; SURFACE_SCANOUT_REFUSED leaves
+ *         the buffer unchanged
+ * @note The view and the back buffer stay unchanged until the poll ends it.
+ */
+int surface_os_display_convert(unsigned back, const void *pixels, unsigned stride,
+    unsigned x, unsigned y, unsigned w, unsigned h);
+/** @brief The conversion's state: BUSY, OK, or ERROR once it failed. */
+int surface_os_display_convert_poll(void);
+/** @brief The conversions started, and those that failed or were refused. */
+void surface_os_display_convert_stats(uint32_t *jobs, uint32_t *failed);
 /** @brief Poll a request; REFUSED preserves its ownership and requires recovery. */
 int surface_os_display_poll(uint64_t token);
 /** @brief Observe idle/conversion scanout events; zero requests recovery. */

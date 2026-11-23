@@ -21,7 +21,8 @@ def generate(base, transfer=False):
              '*tikuSurface/platform/tikuos/input.o', '*interfaces/input/tiku_touch_gt1151.o',
              '*drivers/input/gt1151/tiku_drv_input_gt1151.o',
              '*interfaces/display/tiku_display.o', '*interfaces/display/tiku_display_async.o',
-             '*arch/esp32s31/tiku_display_arch.o', '*arch/esp32s31/tiku_dma_arch.o')
+             '*arch/esp32s31/tiku_display_arch.o', '*arch/esp32s31/tiku_dma_arch.o',
+             '*arch/esp32s31/tiku_ppa_arch.o')
     if transfer:
         units += ('*services/storage/tiku_media_transfer_control.o',
                   '*services/storage/tiku_media_transfer_async.o',

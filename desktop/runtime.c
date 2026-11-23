@@ -754,6 +754,23 @@ static tiku_present_result_t scan_poll(void *context, uint64_t ticket)
            result == SURFACE_SCANOUT_BUSY ? TIKU_PRESENT_BUSY : TIKU_PRESENT_ERROR;
 }
 
+/** @brief Start the PPA on a part of the view: 0 running, -1 refused. */
+static int scan_convert(void *context, unsigned back, const tiku_present_view_t *v, tiku_rect_t r)
+{
+    (void)context;
+    return surface_os_display_convert(back, v->pixels, (unsigned)v->stride, (unsigned)r.x,
+        (unsigned)r.y, (unsigned)r.w, (unsigned)r.h) == SURFACE_SCANOUT_OK ? 0 : -1;
+}
+
+/** @brief The PPA's job: 1 running, 0 done, -1 failed. */
+static int scan_convert_poll(void *context)
+{
+    (void)context;
+    int result = surface_os_display_convert_poll();
+
+    return result == SURFACE_SCANOUT_BUSY ? 1 : result == SURFACE_SCANOUT_OK ? 0 : -1;
+}
+
 #if SURFACE_TOUCH_MODE
 /** @brief Make the touch mark drawn into the buffer on show visible. */
 static int scan_amend(void *context, unsigned buffer, tiku_rect_t r)
@@ -763,9 +780,11 @@ static int scan_amend(void *context, unsigned buffer, tiku_rect_t r)
                                     (unsigned)r.w, (unsigned)r.h);
 }
 
-static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, scan_amend };
+static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, scan_amend, scan_convert,
+                                                scan_convert_poll };
 #else
-static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, NULL };
+static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, NULL, scan_convert,
+                                                scan_convert_poll };
 #endif
 
 /** @brief The presentation lease ends: the frame is on the panel, or failed. */
@@ -1107,10 +1126,12 @@ int surface_runtime_poll(void)
         size_t used = 0, total = 0, largest = 0;
         uint32_t refused = 0, console = 0, files = 0, calls = 0;
         uint64_t mutations = 0;
+        uint32_t ppa_jobs = 0, ppa_failed = 0;
         const char *last = "";
         unsigned lock_mutexes = 0, lock_conds = 0, lock_refused = 0;
 
         rt.last_status = begin;
+        surface_os_display_convert_stats(&ppa_jobs, &ppa_failed);
         surface_os_desktop_heap_use(&used, &total, &refused, &largest);
         surface_desktop_write_stats(&console, &files, &calls, &last);
         (void)tiku_posix_mutations(&mutations);
@@ -1120,7 +1141,7 @@ int surface_runtime_poll(void)
                      " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu canary=%u locks=%u/%u/%u"
                      " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
-                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu\n",
+                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
                      b->event_head, b->event_tail, (unsigned long)b->frame_token,
                      (unsigned long)b->done_token, rt.presentation.phase,
@@ -1137,7 +1158,8 @@ int surface_runtime_poll(void)
                      (unsigned long)rt.phase_us[3], (unsigned long)rt.region_px,
                      (unsigned long)rt.convert_cpu_last, (unsigned long)card_requests,
                      (unsigned long)card_polls, (unsigned long)card_last_us, (unsigned long)card_max_us,
-                     (unsigned long)(card_total_us / 1000u), (unsigned long)mutations);
+                     (unsigned long)(card_total_us / 1000u), (unsigned long)mutations,
+                     (unsigned long)ppa_jobs, (unsigned long)ppa_failed);
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);
     }
     if (b->exited == 1) {
@@ -1158,10 +1180,12 @@ int surface_runtime_continue(void)
     surface_desktop_bridge_t *b = &surface_desktop_bridge;
     uint64_t now = surface_os_time();
     /* Conversion and submission continue at once; a frame waiting on the
-     * panel's DMA, or a burst past its bound, waits for the timer turn. */
+     * panel's DMA or on the PPA, or a burst past its bound, waits for the
+     * timer turn, and the desktop has the processor meanwhile. */
     int work = rt.running && (rt.capturing || rt.sample_dump != UINT32_MAX ||
         rt.stacks_dump != UINT32_MAX || (card_pending() && card_urgent()) ||
-        (rt.presenting != 0 && rt.presentation.phase >= 1u && rt.presentation.phase <= 2u) ||
+        (rt.presenting != 0 && ((rt.presentation.phase == 1u && !rt.presentation.hw) ||
+                                rt.presentation.phase == 2u)) ||
          (rt.presenting == 0 && b->frame != NULL && b->frame_token != b->done_token));
 
     if (!work) {

@@ -8,10 +8,17 @@
 #include <interfaces/display/tiku_display.h>
 #include <arch/esp32s31/tiku_display_arch.h>
 #include <arch/esp32s31/tiku_psram_arch.h>
+#include <arch/esp32s31/tiku_ppa_arch.h>
+
+/* SURFACE_PPA 0 leaves every conversion to the CPU. */
+#ifndef SURFACE_PPA
+#define SURFACE_PPA 1
+#endif
 
 static tiku_display_t display;
 static uint16_t *buffers[2];
 static int opened;
+static uint32_t ppa_jobs, ppa_failed;
 
 int surface_os_display_open(uint16_t *front, uint16_t *back)
 {
@@ -33,6 +40,40 @@ int surface_os_display_submit(unsigned back, unsigned x, unsigned y,
     int result = tiku_display_submit(&display, token, (uint16_t)x, (uint16_t)y,
         (uint16_t)w, (uint16_t)h);
     return result == TIKU_DISPLAY_PENDING ? SURFACE_SCANOUT_OK : SURFACE_SCANOUT_ERROR;
+}
+
+int surface_os_display_convert(unsigned back, const void *pixels, unsigned stride,
+    unsigned x, unsigned y, unsigned w, unsigned h)
+{
+    if (!SURFACE_PPA || !surface_os_in_owner() || !opened || back > 1 ||
+        display.fb != buffers[back] || !pixels || stride < 3200 || (stride & 3u) ||
+        stride > 4u * 16383u || x >= 800 || y >= 480 || !w || !h || w > 800 - x || h > 480 - y)
+        return SURFACE_SCANOUT_REFUSED;
+    tiku_s31_picture_t out = {buffers[back], 800, 480, 2};
+    tiku_s31_picture_t in = {(void *)pixels, (uint16_t)(stride / 4u), 480, 4};
+    if (tiku_s31_ppa_convert(&out, (uint16_t)x, (uint16_t)y, &in, (uint16_t)x, (uint16_t)y,
+                             (uint16_t)w, (uint16_t)h) != TIKU_S31_PPA_OK) {
+        ppa_failed++;
+        return SURFACE_SCANOUT_REFUSED;
+    }
+    ppa_jobs++;
+    return SURFACE_SCANOUT_OK;
+}
+
+int surface_os_display_convert_poll(void)
+{
+    int rc = tiku_s31_ppa_poll();
+
+    if (rc == TIKU_S31_PPA_RUNNING) return SURFACE_SCANOUT_BUSY;
+    if (rc == TIKU_S31_PPA_OK) return SURFACE_SCANOUT_OK;
+    ppa_failed++;
+    return SURFACE_SCANOUT_ERROR;
+}
+
+void surface_os_display_convert_stats(uint32_t *jobs, uint32_t *failed)
+{
+    *jobs = ppa_jobs;
+    *failed = ppa_failed;
 }
 
 int surface_os_display_amend(unsigned buffer, unsigned x, unsigned y,

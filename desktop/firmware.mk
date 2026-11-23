@@ -21,8 +21,16 @@ APPL_SRCS := $(addprefix $(SURFACE_ROOT)/platform/tikuos/,bindings.c diagnostics
 APPL_SRCS += arch/esp32s31/tiku_storage_async_io.c
 APPL_SRCS += interfaces/input/tiku_touch_gt1151.c drivers/input/gt1151/tiku_drv_input_gt1151.c
 APPL_SRCS += interfaces/display/tiku_display.c interfaces/display/tiku_display_async.c \
-    arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_dma_arch.c
-APPL_CFLAGS := -DTIKU_APPLICATION_HEADER='"$(SURFACE_ROOT)/platform/tikuos/boot.h"'
+    arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_dma_arch.c arch/esp32s31/tiku_ppa_arch.c
+# SURFACE_PPA=1 converts the frame into the panel's format by the S31's
+# Pixel Processing Accelerator, with the CPU's loop the fallback; 0 leaves
+# the conversion to the CPU.
+SURFACE_PPA ?= 1
+ifeq ($(filter $(SURFACE_PPA),0 1),)
+$(error SURFACE_PPA must be 0 or 1)
+endif
+APPL_CFLAGS := -DSURFACE_PPA=$(SURFACE_PPA)
+APPL_CFLAGS += -DTIKU_APPLICATION_HEADER='"$(SURFACE_ROOT)/platform/tikuos/boot.h"'
 APPL_CFLAGS += -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DSURFACE_DESKTOP=1
 APPL_CFLAGS += -DTIKU_APPLICATION_PROJECT='"tikusurface_s31_lcd"'
 APPL_CFLAGS += -DTIKU_I2C_BUDGET_ENABLE=1 -DTIKU_TFS_ASYNC_ENABLE=1 -DTIKU_S31_STORAGE_ASYNC_ENABLE=1

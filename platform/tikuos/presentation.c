@@ -187,6 +187,7 @@ tiku_present_result_t surface_presentation_submit(void *context, const tiku_pres
     for (unsigned i = 0; i < SURFACE_PRESENT_PARTS; ++i)
         if (parts[i].w) { p->region = unite(p->region, parts[i]); p->convert_px += area(parts[i]); }
     p->part = 0;
+    p->cpu = 0;
     p->x = (unsigned)parts[0].x; p->y = (unsigned)parts[0].y;
     /* The back buffer is converted without the mark it held when shown. */
     unmark(p, p->front ^ 1u);
@@ -215,6 +216,22 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
     unsigned back = p->front ^ 1u;
     if (p->phase == CONVERT) {
         unsigned remaining = p->pixel_budget;
+        if (p->hw) {
+            int state = p->ops->convert_poll(p->context);
+            if (state > 0) return TIKU_PRESENT_BUSY;
+            p->hw = 0;
+            /* A part done moves on; a failed one the CPU converts again. */
+            if (state == 0) p->y = (unsigned)(p->pending[back][p->part].y + p->pending[back][p->part].h);
+            else p->cpu = 1;
+        }
+        /* Each part starts at its corner here: the hardware takes it whole. */
+        if (p->ops->convert && !p->cpu && next_part(p, back)) {
+            if (p->ops->convert(p->context, back, &p->source, p->pending[back][p->part]) == 0) {
+                p->hw = 1;
+                return TIKU_PRESENT_BUSY;
+            }
+            p->cpu = 1;
+        }
         while (remaining && next_part(p, back)) {
             tiku_rect_t r = p->pending[back][p->part];
             unsigned right = (unsigned)(r.x + r.w);
@@ -268,6 +285,10 @@ int surface_presentation_closed(surface_presentation_t *p)
 {
     if (!p) return 0;
     p->failed = 1;
+    /* A hardware conversion still writing the back buffer ends first. */
+    while (p->hw && p->ops->convert_poll(p->context) > 0) {
+    }
+    p->hw = 0;
     if (!p->phase) return 1;
     return complete(p, TIKU_PRESENT_ERROR) == TIKU_PRESENT_ERROR;
 }
