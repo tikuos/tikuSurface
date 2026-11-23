@@ -25,7 +25,7 @@ static tiku_nvm_backend_t backend = {.base=disk,.size=sizeof disk,.write=write_n
 /** @brief A delayed backend borrows the source and can fail before or after persistence. */
 typedef struct {
     const void *source;
-    unsigned char borrowed[256];
+    unsigned char borrowed[TIKU_TFS_SECT];
     size_t off, length, lengths[64];
     unsigned callbacks, accepted, delay, attempt, fail_call, fail_prefix, reject_call;
 } model_t;
@@ -37,6 +37,7 @@ static int begin(void *context, tiku_nvm_backend_t *be, size_t off, const void *
     ++m->callbacks;
     assert(be==&backend && !m->source && n && n<=sizeof m->borrowed);
     assert(off<=be->size && n<=be->size-off);
+    assert(off/TIKU_TFS_SECT==(off+n-1)/TIKU_TFS_SECT);  /* within one erase sector */
     if (m->accepted==m->reject_call) return TFS_ERR_IO;
     if (!m->attempt++) return TFS_ERR_BUSY;
     m->attempt=0; m->source=data; m->off=off; m->length=n; m->delay=2;

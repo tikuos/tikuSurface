@@ -11,7 +11,7 @@
 static _Alignas(8) uint8_t flash[TIKU_S31_STORAGE_SHADOW],shadow[sizeof flash],baseline[sizeof flash];
 static _Alignas(8) uint8_t live[12288];
 static unsigned unlocked,allows_sync=1,kernel=1,io_calls,accepted,cut_call=~0u,cut_bytes,cut_seen;
-static unsigned pending_kind,pending_length,polls,fail_read;
+static unsigned pending_kind,pending_length,polls,fail_read,mirror_erases;
 static uint32_t pending_address;
 static uint8_t pending_bytes[64];
 #define TIKU_S31_STORAGE_ASYNC_ENABLE 1
@@ -34,7 +34,7 @@ static void access_flash(unsigned kind,uint32_t address,void *buffer,size_t n)
     size_t off=address-TIKU_S31_STORAGE_START;
     assert(n<=sizeof flash-off);
     if(kind==0)memcpy(buffer,flash+off,n);
-    else if(kind==1)memset(flash+off,255,n);
+    else if(kind==1){memset(flash+off,255,n);if(address>=TIKU_S31_MIRROR_A)++mirror_erases;}
     else {
         const uint8_t *src=buffer;
         for(size_t i=0;i<n;i++){assert((flash[off+i]&src[i])==src[i]);flash[off+i]=src[i];}
@@ -84,7 +84,9 @@ static void boot(void)
 static void prepare(void)
 {
     memset(flash,255,sizeof flash);boot();allows_sync=1;
-    live[8192]=0x3c;assert(!tiku_mem_arch_nvm_flush_status());
+    live[8192]=0x3c;mirror_erases=0;assert(!tiku_mem_arch_nvm_flush_status());
+    /* A flush erases the sectors its header and durable bytes reach. */
+    assert(mirror_erases==(LIVE_BYTES+HEADER+SECTOR-1u)/SECTOR);
     uint8_t data[8192];for(unsigned i=0;i<sizeof data;i++)data[i]=(uint8_t)(i^(i>>8));
     tiku_nvm_backend_t be=*tiku_nvm_backend_get();
     assert(!be.write(&be,0,data,sizeof data));allows_sync=0;
