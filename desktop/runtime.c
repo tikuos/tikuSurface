@@ -36,10 +36,12 @@
 #define STACK_BYTES (3072u * 1024u)
 #define STACK_PAINT 0xa5a5a5a5u
 /* The stack of the desktop's job thread (TIKU_WORK_WORKERS in
- * desktop/desktop.mk), from compat/posix: a job runs frames as deep as the
- * Trash's 280,640 bytes.  Painted as the desktop's is; the status line
- * reports its deepest use. */
-#define JOBS_BYTES (1024u * 1024u)
+ * desktop/desktop.mk), from compat/posix.  The deepest frame a job reaches
+ * is emptying the Trash, fop_fs_empty_trash()'s 280,640 bytes.  The stack
+ * comes out of the heap, which is the RAM home's free space as statvfs()
+ * reports it, so it is no larger than that frame needs.  Painted as the
+ * desktop's is; the status line reports its deepest use. */
+#define JOBS_BYTES (512u * 1024u)
 #define STACK_SCAN_WORDS 4096u   /* words examined per turn for the high-water mark */
 #define SAMPLE_SLOTS 4096u       /* program counters kept, one per kernel turn */
 #define SAMPLE_LINE 48u          /* samples printed per turn by the dump */
