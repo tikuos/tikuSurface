@@ -63,95 +63,53 @@ static int clock_state = SURFACE_CLOCK_SET;
 
 #include "fake_store.h"
 
-/* TikuOS's compat/posix over a fixed namespace: /sys holding uptime, "77\n",
- * and /data, the store, in fake_store.h.  One /sys descriptor and one stream
- * at a time; each call is counted. */
-static const char board_text[] = "77\n";
-static int board_fd = -1, board_calls, board_pos;
-static size_t board_off;
-static DIR board_stream;
-static struct dirent board_entry;
+/* TikuOS's compat/posix: the store's files in fake_store.h; any other path
+ * is not the library's.  Each call is counted. */
+static int library_calls;
 int tiku_posix_open(const char *path, int flags)
 {
-    board_calls++;
+    library_calls++;
     if (fake_path(path)) return fake_open(path, flags);
-    if (strcmp(path, "/sys/uptime") != 0) {
-        errno = ENOENT;
-        return -1;
-    }
-    if ((flags & O_ACCMODE) != O_RDONLY) {
-        errno = EROFS;
-        return -1;
-    }
-    board_fd = 3;
-    board_off = 0;
-    return board_fd;
+    errno = ENOENT;
+    return -1;
 }
 ssize_t tiku_posix_read(int fd, void *buf, size_t n)
 {
-    size_t left = sizeof board_text - 1u - board_off;
-
-    board_calls++;
+    library_calls++;
     if (fake_fd(fd)) return fake_read(fd, buf, n);
-    if (fd != board_fd) {
-        errno = EBADF;
-        return -1;
-    }
-    if (n > left) n = left;
-    memcpy(buf, board_text + board_off, n);
-    board_off += n;
-    return (ssize_t)n;
+    errno = EBADF;
+    return -1;
 }
 off_t tiku_posix_lseek(int fd, off_t offset, int whence)
 {
-    board_calls++;
+    library_calls++;
     if (fake_fd(fd)) return fake_lseek(fd, offset, whence);
-    if (fd != board_fd || whence != SEEK_SET || offset < 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    board_off = (size_t)offset;
-    return offset;
+    errno = EBADF;
+    return -1;
 }
 int tiku_posix_close(int fd)
 {
-    board_calls++;
+    library_calls++;
     if (fake_fd(fd)) return fake_close(fd);
-    if (fd != board_fd) {
-        errno = EBADF;
-        return -1;
-    }
-    board_fd = -1;
-    return 0;
+    errno = EBADF;
+    return -1;
 }
 int tiku_posix_fcntl(int fd, int cmd) { (void)fd; (void)cmd; return O_RDONLY; }
 int tiku_posix_fstat(int fd, struct stat *st)
 {
-    board_calls++;
+    library_calls++;
     if (fake_fd(fd)) return fake_fstat(fd, st);
-    if (fd != board_fd) {
-        errno = EBADF;
-        return -1;
-    }
-    memset(st, 0, sizeof *st);
-    st->st_mode = S_IFREG | 0444;
-    return 0;
+    errno = EBADF;
+    return -1;
 }
 int tiku_posix_stat(const char *path, struct stat *st)
 {
-    board_calls++;
+    library_calls++;
     if (fake_path(path)) return fake_stat(path, st);
-    memset(st, 0, sizeof *st);
-    st->st_ino = (ino_t)(strlen(path) + 100u);
-    if (strcmp(path, "/") == 0 || strcmp(path, "/sys") == 0) st->st_mode = S_IFDIR | 0555;
-    else if (strcmp(path, "/sys/uptime") == 0) st->st_mode = S_IFREG | 0444;
-    else {
-        errno = ENOENT;
-        return -1;
-    }
-    return 0;
+    errno = ENOENT;
+    return -1;
 }
-int tiku_posix_is_open(int fd) { return fd == board_fd || fake_slot(fd) != NULL; }
+int tiku_posix_is_open(int fd) { return fake_slot(fd) != NULL; }
 ssize_t tiku_posix_write(int fd, const void *buf, size_t n) { return fake_write(fd, buf, n); }
 int tiku_posix_fsync(int fd) { return fake_fsync(fd); }
 int tiku_posix_rename(const char *from, const char *to)
@@ -162,31 +120,15 @@ int tiku_posix_rename(const char *from, const char *to)
 int tiku_posix_unlink(const char *path) { return fake_path(path) ? fake_unlink(path) : (errno = EROFS, -1); }
 DIR *tiku_posix_opendir(const char *path)
 {
-    board_calls++;
-    if (strcmp(path, "/sys") != 0) {
-        errno = ENOENT;
-        return NULL;
-    }
-    board_pos = 0;
-    return &board_stream;
+    library_calls++;
+    (void)path;
+    errno = ENOENT;
+    return NULL;
 }
-struct dirent *tiku_posix_readdir(DIR *dir)
-{
-    board_calls++;
-    if (dir != &board_stream || board_pos > 0) return NULL;
-    board_pos++;
-    snprintf(board_entry.d_name, sizeof board_entry.d_name, "uptime");
-    board_entry.d_type = DT_REG;
-    return &board_entry;
-}
-void tiku_posix_rewinddir(DIR *dir) { if (dir == &board_stream) board_pos = 0; }
-int tiku_posix_closedir(DIR *dir)
-{
-    board_calls++;
-    board_pos = -1;
-    return dir == &board_stream ? 0 : -1;
-}
-int tiku_posix_is_dir_stream(const DIR *dir) { return dir == &board_stream; }
+struct dirent *tiku_posix_readdir(DIR *dir) { (void)dir; return NULL; }
+void tiku_posix_rewinddir(DIR *dir) { (void)dir; }
+int tiku_posix_closedir(DIR *dir) { (void)dir; errno = EBADF; return -1; }
+int tiku_posix_is_dir_stream(const DIR *dir) { (void)dir; return 0; }
 uint8_t tiku_posix_authority_set(uint8_t cap) { (void)cap; return 0; }
 int surface_os_clock_state(void) { return clock_state; }
 void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
@@ -521,61 +463,31 @@ int main(void)
         assert(_stat("/tmp/dated", &st) == 0 && st.st_mtime >= now && st.st_mtime <= now + 5);
     }
 
-    /* /Board: the kernel's namespace through compat/posix, read-only. */
+    /* The kernel's namespace is Tracker's device (desktop/board.c), not a
+     * folder of this tree: /Board is not here and reaches no library call. */
     {
-        char got[8];
         struct stat st;
-        int fd, calls;
         DIR *bd;
         struct dirent *be;
-        int listed = 0;
+        int calls = library_calls, listed = 0;
 
-        fd = _open("/Board/sys/uptime", O_RDONLY, 0);
-        assert(fd >= 0 && board_fd == 3);
-        assert(_read(fd, got, sizeof got) == 3 && memcmp(got, "77\n", 3) == 0);
-        assert(_read(fd, got, sizeof got) == 0);
-        assert(_lseek(fd, 1, SEEK_SET) == 1 && _read(fd, got, 1) == 1 && got[0] == '7');
-        assert(_fstat(fd, &st) == 0 && S_ISREG(st.st_mode));
-        assert(_close(fd) == 0 && board_fd == -1);
         errno = 0;
-        assert(_close(fd) == -1 && errno == EBADF);
-        calls = board_calls;
+        assert(_open("/Board/sys/uptime", O_RDONLY, 0) == -1 && errno == ENOENT);
         errno = 0;
-        assert(_open("/Board/sys/uptime", O_WRONLY, 0) == -1 && errno == EROFS);
-        assert(board_calls == calls);
-        errno = 0;
-        assert(_open("/Board/sys/missing", O_RDONLY, 0) == -1 && errno == ENOENT);
-        assert(_stat("/Board", &st) == 0 && S_ISDIR(st.st_mode) && st.st_dev == 3);
-        assert(_stat("/Board/sys/uptime", &st) == 0 && S_ISREG(st.st_mode));
-        assert(access("/Board/sys/uptime", R_OK) == 0);
-        errno = 0;
-        assert(access("/Board/sys/uptime", W_OK) == -1 && errno == EROFS);
-        errno = 0;
-        assert(_unlink("/Board/sys/uptime") == -1 && errno == EROFS);
-        errno = 0;
-        assert(mkdir("/Board/new", 0755) == -1 && errno == EROFS);
-        errno = 0;
-        assert(_rename("/tmp/dated", "/Board/x") == -1 && errno == EROFS);
-        bd = opendir("/Board/sys");
-        assert(bd != NULL && !strcmp(next(bd), "uptime") && !strcmp(next(bd), ""));
-        rewinddir(bd);
-        assert(!strcmp(next(bd), "uptime") && closedir(bd) == 0 && board_pos == -1);
+        assert(_stat("/Board", &st) == -1 && errno == ENOENT);
+        assert(opendir("/Board") == NULL);
         bd = opendir("/");
         while (bd != NULL && (be = readdir(bd)) != NULL) {
             if (strcmp(be->d_name, "Board") == 0) listed = 1;
         }
-        assert(bd != NULL && closedir(bd) == 0 && listed);
-        assert(chdir("/Board") == 0);
-        fd = _open("sys/uptime", O_RDONLY, 0);
-        assert(fd >= 0 && _close(fd) == 0);
-        assert(chdir("/") == 0);
+        assert(bd != NULL && closedir(bd) == 0 && !listed && library_calls == calls);
     }
 
     test_settings_store();
     test_attributes();
     puts("posix layer: the home's note is seeded; directory streams outlive the "
          "entries they reach; files have no date while the clock is unset; "
-         "/Board reads through compat/posix; the settings files are the store's; "
+         "the kernel's namespace is not in the tree; the settings files are the store's; "
          "the start-up folders' attributes are kept in the store");
     return 0;
 }

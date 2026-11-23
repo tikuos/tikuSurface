@@ -100,10 +100,6 @@ static void removed(rnode_t *n)
  * replaced after each read, so earlier output cannot be recomputed from
  * the state.  Without a seed, reads fail with EIO. */
 static rnode_t random_device = { .name = "urandom", .mode = S_IFCHR | 0444, .ino = 1 };
-/* /Board: the kernel's namespace, read through TikuOS's compat/posix.  A
- * descriptor on it holds this node and keeps the library's descriptor in
- * its reader field. */
-static rnode_t board_device = { .name = "board", .mode = S_IFREG | 0444, .ino = 2 };
 static unsigned char random_key[32];
 static uint64_t random_counter;
 static int random_seeded;
@@ -466,35 +462,14 @@ static const char *under(const char *path, const char *mount, char full[PATH_MAX
     return path;
 }
 
-/** @brief Whether @p path names /Card or /Board or a path under either; such
- *  paths refuse changes with EROFS. */
+/** @brief Whether @p path names /Card or a path under it; such paths refuse
+ *  changes with EROFS. */
 static int read_only_path(const char *path)
 {
     char full[PATH_MAX];
 
-    if (under(path, "/Card", full) == NULL && under(path, "/Board", full) == NULL) return 0;
+    if (under(path, "/Card", full) == NULL) return 0;
     errno = EROFS;
-    return 1;
-}
-
-/** @brief A /Board node's stat: compat/posix's, with /Board's own device
- *  beside the tree's 1 and /Card's 2, so its node numbers meet no others.
- *  @return @p result, the library call's */
-static int board_stat(int result, struct stat *st)
-{
-    if (result == 0) st->st_dev = 3;
-    return result;
-}
-
-/** @brief For /Board or a path under it, the kernel path it names, in
- *  @p kernel; 0 for any other path. */
-static int board_path(const char *path, char *kernel, size_t max)
-{
-    char full[PATH_MAX];
-    const char *at = under(path, "/Board", full);
-
-    if (at == NULL) return 0;
-    snprintf(kernel, max, "%s", at[6] == '\0' ? "/" : at + 6);
     return 1;
 }
 
@@ -751,17 +726,14 @@ static int surface_desktop_files_locked(void)
     (void)make_dirs("/system/deskbar");
     (void)make_dirs("/system/apps");
     (void)make_dirs("/tmp");
-    /* /Board is the kernel's namespace: this node only names it in the
-     * root's listing, and every call under it goes to compat/posix. */
-    if (node_new(root, "Board", S_IFDIR | 0555) == NULL) return -1;
     if (surface_desktop_bridge.card_mounted) {
         rnode_t *card = node_new(root, "Card", S_IFDIR | 0555);
 
         if (card == NULL || card_mark(card, "", 0) != 0) return -1;
         seed("/proc/self/mounts",
-             "tikufs / ramfs rw 0 0\ncard /Card mfs ro 0 0\nboard /Board vfs ro 0 0\n", 0644);
+             "tikufs / ramfs rw 0 0\ncard /Card mfs ro 0 0\n", 0644);
     } else {
-        seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\nboard /Board vfs ro 0 0\n", 0644);
+        seed("/proc/self/mounts", "tikufs / ramfs rw 0 0\n", 0644);
     }
     seed("/proc/partitions", "major minor  #blocks  name\n", 0644);
     /* /home/.config/TrackerSettings is in the store; its default, with
@@ -968,7 +940,7 @@ static rnode_t *stored_copy(unsigned i)
 }
 
 /** @brief A store file's stat, on a device of its own (the tree's is 1,
- *  /Card's 2, /Board's 3).  @return @p result */
+ *  /Card's 2).  @return @p result */
 static int stored_stat(int result, struct stat *st)
 {
     if (result == 0) st->st_dev = 4;
@@ -1166,13 +1138,13 @@ static ssize_t attr_list(rnode_t *n, char *list, size_t size)
 }
 
 /** @brief The node whose attributes @p path names; NULL with ENOTSUP for a
- *  card, board or store path, whose files have none here. */
+ *  card or store path, whose files have none here. */
 static rnode_t *attr_node(const char *path)
 {
     char full[PATH_MAX], key[PATH_MAX];
     int main_file;
 
-    if (under(path, "/Card", full) != NULL || under(path, "/Board", full) != NULL ||
+    if (under(path, "/Card", full) != NULL ||
         stored_path(path, key, sizeof key, &main_file) >= 0) {
         errno = ENOTSUP;
         return NULL;
@@ -1186,7 +1158,7 @@ static rnode_t *attr_fd_node(int fd)
     fd_t *f = fd_of(fd);
 
     if (f == NULL) return NULL;
-    if (f->node == &board_device || f->node == &store_device || f->node->card != NULL ||
+    if (f->node == &store_device || f->node->card != NULL ||
         f->node == &random_device) {
         errno = ENOTSUP;
         return NULL;
@@ -1336,24 +1308,6 @@ static int _open_locked(const char *path, int flags, int mode)
 
         if (i >= 0) return stored_open((unsigned)i, key, main, flags);
     }
-    {
-        char kernel[PATH_MAX];
-
-        if (board_path(path, kernel, sizeof kernel)) {
-            int board = tiku_posix_open(kernel, flags);
-
-            if (board < 0) return -1;
-            for (fd = FIRST_FD; fd < FDS && fds[fd].node != NULL; fd++) {
-            }
-            if (fd == FDS) {
-                (void)tiku_posix_close(board);
-                errno = EMFILE;
-                return -1;
-            }
-            fd_fill(fd, &board_device, flags, (uint64_t)board);
-            return fd;
-        }
-    }
     n = resolve(path, &parent, &leaf, &len);
     if (n == NULL) {
         if (errno != ENOENT || parent == NULL || !(flags & O_CREAT)) return -1;
@@ -1406,10 +1360,6 @@ static int _close_locked(int fd)
 
     if (fd >= 0 && fd < FIRST_FD) return 0;
     if (f == NULL || fd_idle(f, f->gen) != 0) return -1;
-    if (f->node == &board_device) {
-        f->node = NULL;
-        return tiku_posix_close((int)f->reader);
-    }
     if (f->node == &store_device) {
         int r;
 
@@ -1514,7 +1464,6 @@ static _ssize_t read_at(int fd, void *buf, size_t n, const off_t *at)
         errno = EBADF;
         return -1;
     }
-    if (f->node == &board_device) return tiku_posix_read((int)f->reader, buf, n);
     if (f->node == &store_device) {
         off_t keep;
         _ssize_t got;
@@ -1606,8 +1555,7 @@ static off_t _lseek_locked(int fd, off_t offset, int whence)
     off_t base;
 
     if (f == NULL) return -1;
-    if (f->node == &board_device || f->node == &store_device)
-        return tiku_posix_lseek((int)f->reader, offset, whence);
+    if (f->node == &store_device) return tiku_posix_lseek((int)f->reader, offset, whence);
     base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? f->pos :
            whence == SEEK_END ? (off_t)f->node->size : -1;
     if (base < 0 || base + offset < 0) {
@@ -1629,7 +1577,6 @@ static int _fstat_locked(int fd, struct stat *st)
     }
     f = fd_of(fd);
     if (f == NULL) return -1;
-    if (f->node == &board_device) return board_stat(tiku_posix_fstat((int)f->reader, st), st);
     if (f->node == &store_device) return stored_stat(tiku_posix_fstat((int)f->reader, st), st);
     fill_stat(f->node, st);
     return 0;
@@ -1640,7 +1587,6 @@ static int _stat_locked(const char *path, struct stat *st)
     char kernel[PATH_MAX];
     rnode_t *n;
 
-    if (board_path(path, kernel, sizeof kernel)) return board_stat(tiku_posix_stat(kernel, st), st);
     {
         int main = 0, i = stored_path(path, kernel, sizeof kernel, &main);
 
@@ -1896,14 +1842,6 @@ static int access_locked(const char *path, int mode)
     struct stat st;
     rnode_t *n;
 
-    if (board_path(path, kernel, sizeof kernel)) {
-        if (tiku_posix_stat(kernel, &st) != 0) return -1;
-        if (mode & W_OK) {
-            errno = EROFS;
-            return -1;
-        }
-        return 0;
-    }
     if (stored_path(path, kernel, sizeof kernel, NULL) >= 0) {
         if (_stat_locked(path, &st) != 0) return -1;
         if (mode & X_OK) {
@@ -2214,7 +2152,6 @@ int mkstemp(char *tmpl) { return mkstemps(tmpl, 0); }
 
 typedef struct rdir {
     DIR base;
-    DIR *board;                 /* a /Board stream: the library's */
     rnode_t *dir, *at;
     int dots;
     struct dirent entry;
@@ -2236,23 +2173,9 @@ static void streams_pass(const rnode_t *n)
 
 static DIR *opendir_locked(const char *path)
 {
-    char kernel[PATH_MAX];
     rnode_t *n;
     rdir_t *d;
 
-    if (board_path(path, kernel, sizeof kernel)) {
-        DIR *board = tiku_posix_opendir(kernel);
-
-        if (board == NULL) return NULL;
-        d = calloc(1, sizeof *d);
-        if (d == NULL) {
-            (void)tiku_posix_closedir(board);
-            errno = ENOMEM;
-            return NULL;
-        }
-        d->board = board;
-        return &d->base;
-    }
     n = lookup(path);
     if (n == NULL) return NULL;
     if (!S_ISDIR(n->mode)) {
@@ -2281,7 +2204,6 @@ static struct dirent *readdir_locked(DIR *dp)
         errno = EBADF;
         return NULL;
     }
-    if (d->board != NULL) return tiku_posix_readdir(d->board);
     if (d->dots < 2) {
         d->entry.d_ino = d->dir->ino;
         d->entry.d_type = DT_DIR;
@@ -2302,10 +2224,6 @@ static void rewinddir_locked(DIR *dp)
     rdir_t *d = (rdir_t *)dp;
 
     if (d == NULL) return;
-    if (d->board != NULL) {
-        tiku_posix_rewinddir(d->board);
-        return;
-    }
     d->at = d->dir->child;
     d->dots = 0;
 }
@@ -2317,12 +2235,6 @@ static int closedir_locked(DIR *dp)
     if (d == NULL) {
         errno = EBADF;
         return -1;
-    }
-    if (d->board != NULL) {
-        int r = tiku_posix_closedir(d->board);
-
-        free(d);
-        return r;
     }
     for (p = &streams; *p != NULL; p = &(*p)->next) {
         if (*p == d) {
@@ -2902,56 +2814,6 @@ void surface_desktop_selftest(void)
              read(fd, b, sizeof b) == (ssize_t)sizeof b && memcmp(a, b, sizeof a) != 0 &&
              close(fd) == 0;
         fprintf(stderr, "posix: urandom=%d errno=%d\n", ok, ok ? 0 : errno);
-    }
-    {
-        /* The kernel's namespace through /Board, as Tracker reads it:
-         * /sys/uptime between two readings of the monotonic clock, /sys
-         * listed, and a write refused. */
-        char text[24] = "";
-        struct timespec t0, t1;
-        unsigned long value;
-        int fd, n, listed = 0;
-
-        (void)clock_gettime(CLOCK_MONOTONIC, &t0);
-        fd = open("/Board/sys/uptime", O_RDONLY);
-        n = fd >= 0 ? (int)read(fd, text, sizeof text - 1u) : -1;
-        (void)clock_gettime(CLOCK_MONOTONIC, &t1);
-        if (n > 0) text[n] = '\0';
-        value = n > 0 ? strtoul(text, NULL, 10) : 0ul;
-        ok = fd >= 0 && n > 0 && close(fd) == 0 &&
-             value + 1u >= (unsigned long)t0.tv_sec && value <= (unsigned long)t1.tv_sec + 1u;
-        fprintf(stderr, "posix: board-uptime=%d value=%lu mono=%lu-%lu\n", ok, value,
-                (unsigned long)t0.tv_sec, (unsigned long)t1.tv_sec);
-        d = opendir("/Board/sys");
-        while (d != NULL && (e = readdir(d)) != NULL) {
-            if (strcmp(e->d_name, "uptime") == 0) listed = 1;
-        }
-        ok = d != NULL && closedir(d) == 0 && listed;
-        fprintf(stderr, "posix: board-readdir=%d\n", ok);
-        /* The root, as Tracker lists a volume: every entry stats, on
-         * /Board's device, with a number of its own. */
-        {
-            ino_t seen[16];
-            int count = 0, distinct = 1;
-
-            ok = (d = opendir("/Board")) != NULL;
-            while (ok && (e = readdir(d)) != NULL) {
-                char at[PATH_MAX];
-
-                snprintf(at, sizeof at, "/Board/%s", e->d_name);
-                ok = stat(at, &st) == 0 && st.st_dev == 3 && st.st_ino == e->d_ino;
-                for (int i = 0; i < count && i < 16; i++) {
-                    if (seen[i] == st.st_ino) distinct = 0;
-                }
-                if (count < 16) seen[count] = st.st_ino;
-                count++;
-            }
-            ok = ok && closedir(d) == 0 && distinct && count > 1;
-            fprintf(stderr, "posix: board-root=%d entries=%d\n", ok, count);
-        }
-        ok = open("/Board/sys/uptime", O_WRONLY) < 0 && errno == EROFS &&
-             unlink("/Board/sys/uptime") != 0 && errno == EROFS;
-        fprintf(stderr, "posix: board-erofs=%d\n", ok);
     }
 }
 

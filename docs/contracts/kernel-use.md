@@ -30,7 +30,7 @@ describes.
 | Background work | Stomme's jobs (`tiku_work.c`, `TIKU_WORK_WORKERS=1`) on one thread of TikuOS's `compat/posix` threads group: a kernel worker with a 384 KiB stack in the runtime's PSRAM span, taken from the desktop's heap | `desktop/desktop.mk`, `desktop/firmware.mk`; `surface_os_desktop_jobs_memory()` | Job thread | Until restart |
 | The C library's heap | TikuOS's `compat/posix` heap group (`TIKU_POSIX_HEAP`): `_sbrk_r` over the part of the runtime's PSRAM arena the desktop gives, and the allocator's lock, a short interrupt-masked section; newlib's allocator runs inside it. The kernel keeps no heap. | `surface_os_desktop_heap_memory()`, `surface_os_desktop_heap_use()`; the post-link check refuses a heap hook from anywhere else | Desktop, job and kernel threads | Until restart |
 | Mutexes, condition variables, the C library's locks | TikuOS's `compat/posix` threads group: `pthread_mutex_*`, `pthread_cond_*` and newlib's stream, environment and time-zone locks on kernel wait queues | Linked with the library; `desktop/posix.c` defines none; the status line's `locks=` shows their use | Desktop and job threads | Call |
-| The kernel's namespace, read | `/Board` in the desktop's tree: `compat/posix`'s read group over `tiku_vfs_read_at` and `tiku_vfs_list`, each call on the kernel thread through `tiku_thread_call` | `desktop/posix.c` routes `/Board` paths to `tiku_posix_*`; changes are refused with `EROFS` | Desktop thread | Call |
+| The kernel's namespace | A Tracker device at `/devices/<name>` (`/sys/device/name`): the manifest `/sys/vfs/manifest` for nodes, descriptors, capabilities and ids, `compat/posix`'s reads, its node writes under the authority `TIKU_VFS_CAP_SYS` and `TIKU_VFS_CAP_FS`, and the file store for `/data`'s files; changes from the backend's own reader of the VFS change ring, a descriptor on `/sys/vfs/events`, beside the console's | `desktop/board.c`, mounted through Stomme's `TIKU_SHELL_LOCAL_BOARD`; `surface_os_desktop_authority()`. Writes reach `/data`'s files and five reviewed settings (device name, CPU frequency target, crypto mode, radio power, time); a secret is not read | Desktop and job threads | Call |
 | Touch calibration | File store record `tikusurface-cal-v1` in `/data` | `platform/tikuos/settings_io.c` | Owner turn | Durable |
 | Desktop settings and session state | TikuOS's `compat/posix` store group over the file store: `TrackerSettings`, `tracker/types` and `devices/local.state` are `/data/ts/settings`, `ts/types` and `ts/session`, their temporaries the key with the same ending; written through 16 KiB stages from the runtime's arena and published by `fsync`, `close` and `rename`.  The start-up folders' extended attributes are `/data/ts/views`, written an hour after its last write and when the desktop quits | `desktop/posix.c` routes the paths and reads each file from a copy of its published content; `surface_os_desktop_store_memory()` | Desktop and job threads | Durable |
 | Random source | `tiku_trng_arch_read_bytes` | `surface_os_desktop_random()` | Desktop thread | Seed |
@@ -44,17 +44,17 @@ describes.
 | Files, directories, descriptors | A tree in the desktop's heap, `desktop/posix.c`, under one lock that a card request gives back while it waits | Stomme and newlib call POSIX; the tree is lost at every restart | The VFS, `/data` and the media store, through a POSIX library in TikuOS |
 | Per-file view state | Extended attributes on the tree's nodes, `desktop/posix.c`, for Stomme built with `TIKU_STATE_XATTR`; those of `/home`, its `Desktop` and `Documents` and the Tracker desktop are kept in `/data/ts/views` | The file store has no attributes; the other files are lost at restart | Attributes in the file store |
 | Random numbers for the desktop | SHA-256 in counter mode over a TRNG seed, `desktop/posix.c` | `/dev/urandom` for the desktop's tree | Stays with the file layer |
-| Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash; the desktop and job threads take turns on the card's, and the job thread's card request is polled at full rate only while the desktop thread is blocked with no frame waiting | Written before the kernel had a path for a worker's request; `/Board` reads use the kernel's | `tiku_thread_call` |
+| Requests from the desktop thread to the owner | Token pairs in `desktop/bridge.h`: frames, card, touch map, hash; the desktop and job threads take turns on the card's, and the job thread's card request is polled at full rate only while the desktop thread is blocked with no frame waiting | Written before the kernel had a path for a worker's request; the board's namespace uses the kernel's | `tiku_thread_call` |
 | Change notices | A counter of tree changes the desktop polls, `tiku_posix_mutations()`; a descriptor's writes count at its first write and at its close | Changes happen only in the desktop's own tree; any change re-lists every open folder view | `tiku_vfs_watch` and the VFS change ring |
 | Profiler samples | Reads a worker's saved context from the thread control block, `surface_os_desktop_sample()` | The kernel has no call for it | A kernel sampling call |
 | SD card view | `/Card` as a read-only tree in `desktop/posix.c` | Writes are not bound | The media store's write operations |
 
 ## Not reached by the native desktop
 
-Writes to the kernel's namespace, its change notices, its processes and
-shell, the network and programs that open windows on a desktop are not
-visible to the native desktop; the namespace itself is read-only under
-`/Board`. Starting a program is refused: `execvp` returns `ENOSYS`,
+The kernel's processes and shell, the network and programs that open
+windows on a desktop are not visible to the native desktop; of the
+namespace's nodes, only the reviewed settings and `/data`'s files are
+written. Starting a program is refused: `execvp` returns `ENOSYS`,
 and `fork` reaches libnosys's `_fork`, which does the same. Remote sessions are
 answered as absent (`desktop/absent.c`).
 The core image's shell reaches the namespace, the process table, the kernel's

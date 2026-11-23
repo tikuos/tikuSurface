@@ -21,6 +21,7 @@
 #include "../platform/tikuos/display.h"
 #include "../platform/tikuos/input.h"
 #include "../platform/tikuos/settings_io.h"
+#include "board.h"
 #include "gesture.h"
 #include "tiku_trk_deskbar.h"
 #include <pthread.h>
@@ -905,6 +906,7 @@ static void desktop_thread(void *arg)
 
     (void)arg;
     surface_desktop_selftest();
+    surface_board_selftest();
     code = surface_desktop_main(1, argv);
     (void)surface_desktop_views_save();
     surface_desktop_bridge.exit_code = code;
@@ -941,7 +943,8 @@ int surface_runtime_start(void)
     if (surface_os_desktop_heap_memory(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES -
                                        JOBS_BYTES - STAGES_BYTES) != 0 ||
         surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0 ||
-        surface_os_desktop_store_memory(stages, STAGES_BYTES) != 0) {
+        surface_os_desktop_store_memory(stages, STAGES_BYTES) != 0 ||
+        surface_os_desktop_authority() != 0) {
         rt.failed = 1;
         return 0;
     }

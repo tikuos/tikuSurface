@@ -15,6 +15,7 @@
 #include <kernel/process/tiku_process.h>
 #include <kernel/threads/tiku_thread.h>
 #include <kernel/timers/tiku_clock.h>
+#include <kernel/vfs/tiku_vfs.h>
 #include <services/console/tiku_console.h>
 #include <arch/esp32s31/tiku_trng_arch.h>
 #include <arch/esp32s31/tiku_runtime_arch.h>
@@ -133,6 +134,13 @@ int surface_os_desktop_store_memory(void *memory, size_t bytes)
 {
     if (!tiku_thread_in_kernel()) return -1;
     return tiku_posix_store_memory(memory, bytes) == 0 ? 0 : -1;
+}
+
+int surface_os_desktop_authority(void)
+{
+    if (!tiku_thread_in_kernel()) return -1;
+    (void)tiku_posix_authority_set(TIKU_VFS_CAP_SYS | TIKU_VFS_CAP_FS);
+    return 0;
 }
 
 int surface_os_desktop_heap_memory(void *memory, size_t bytes)

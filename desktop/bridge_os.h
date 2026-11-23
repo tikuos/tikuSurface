@@ -63,6 +63,10 @@ int surface_os_desktop_jobs_memory(void *memory, size_t bytes);
  *         the stages of the settings files it writes; 0, or -1 when refused.
  *         Kernel owner only, before the desktop thread starts. */
 int surface_os_desktop_store_memory(void *memory, size_t bytes);
+/** @brief Give the desktop's calls into the kernel's VFS their authority:
+ *  system settings and the file store (TIKU_VFS_CAP_SYS | TIKU_VFS_CAP_FS).
+ *  @return 0, or -1 off the kernel thread */
+int surface_os_desktop_authority(void);
 /** @brief Make @p bytes at @p memory the C library's heap, through TikuOS's
  *         compat/posix heap group; 0, or -1 when refused.  Kernel owner
  *         only, before anything allocates. */

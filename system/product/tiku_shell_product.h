@@ -18,6 +18,13 @@
 /** @brief The Deskbar clock shows the kernel wall clock's standing: unset,
  *  or carried over a restart and not current. */
 #define TIKU_SHELL_CLOCK_STATE 1
+/* On TikuOS the board's own namespace is mounted as a device at start
+ * (desktop/board.c). */
+#if defined(TIKU_SURFACE_TIKUOS) && TIKU_SURFACE_TIKUOS
+#include <stddef.h>
+struct tiku_backend *surface_board_open(char *name, size_t max);
+#define TIKU_SHELL_LOCAL_BOARD surface_board_open
+#endif
 /** @brief Enable remote text input, accessibility, links and printing. */
 #define TIKU_SHELL_REMOTE_SERVICES 0
 /** @brief Enable note placement with automatic title-tab hiding. */
