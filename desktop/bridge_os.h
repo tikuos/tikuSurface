@@ -75,6 +75,13 @@ int surface_os_desktop_heap_memory(void *memory, size_t bytes);
  *         largest of them; any argument may be NULL.  Callable from the
  *         kernel and the desktop's threads; it does not wait. */
 void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused, size_t *largest);
+/** @brief Heap bytes the C library's allocator has handed out and not taken
+ *         back, by its own count; the desktop's threads only. */
+size_t surface_os_desktop_heap_live(void);
+/** @brief PSRAM's size, the bytes below the kernel's PSRAM tier, the tier's
+ *         size and its bytes not reserved; 0, or -1 without a tier.  Kernel
+ *         owner only. */
+int surface_os_psram_extent(size_t *size, size_t *below, size_t *tier, size_t *spare);
 /** @brief Mutexes and condition variables in use, and those refused for a
  *         full table; a refused lock leaves its caller unlocked. */
 void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused);

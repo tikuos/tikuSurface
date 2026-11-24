@@ -31,13 +31,24 @@ defaults to the pinned `foundation/`.
 
 ## Runtime
 
-Start reserves the runtime's PSRAM span for two RGB565 scanout buffers, the
-desktop thread's 3 MiB stack and the C library's heap. It mounts the SD card
+Start reserves the runtime's PSRAM span for two RGB565 frame buffers, the
+desktop thread's 2.75 MiB stack, the job thread's 384 KiB stack, the settings
+files' stages and the C library's heap. It mounts the SD card
 without writing, seeds the desktop's random generator, opens the panel and
 touch, and starts the desktop on a TikuOS thread. Each owner turn turns touch
 reports into pointer events, presents a frame the desktop handed over and
 advances the desktop's card request. The shell's zero-initialized statics sit
 in a 640 KiB section at the top of PSRAM; the firmware's PSRAM tier ends below it.
+
+The About box draws the panel's SRAM, PSRAM and flash as bars, each with its
+areas and what is in use, from `tiku_sys_memory_map()` in `desktop/sys.c`:
+the kernel's `/sys/mem/sram_map` and `/sys/mem/nvm_map`, and PSRAM in address
+order, the file store's shadow below the kernel's tier, the tier's free bytes,
+the drivers' buffers in it (the panel's scan-out and the card's bitmap), the
+runtime's frames, the two stacks with their deepest use, the stages and the
+heap with the bytes its allocator has handed out, then the shell's statics.
+Its free memory is the heap less those bytes. Hosted in the desktop's process,
+the box takes about 2 MB of the heap while it is open.
 
 ## Clock
 

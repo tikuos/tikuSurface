@@ -82,4 +82,15 @@ unsigned surface_desktop_card_foreign(void);
 /** @brief Monotonic microseconds since boot. */
 uint64_t surface_desktop_now_us(void);
 
+/** @brief The desktop runtime's memory, in bytes: PSRAM, the part below the
+ *  kernel's tier, the tier and its bytes not reserved (0 when unknown, the
+ *  last as of the latest status line), the runtime's span in the tier, and
+ *  the span's parts with the stacks' deepest use. */
+typedef struct {
+    size_t psram, below, tier, spare;
+    size_t span, frames, stack, stack_used, jobs, jobs_used, stages, heap;
+} surface_desktop_memory_t;
+/** @brief Fill @p m; any thread. */
+void surface_desktop_memory(surface_desktop_memory_t *m);
+
 #endif

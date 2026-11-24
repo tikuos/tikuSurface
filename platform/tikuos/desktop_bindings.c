@@ -19,6 +19,9 @@
 #include <services/console/tiku_console.h>
 #include <arch/esp32s31/tiku_trng_arch.h>
 #include <arch/esp32s31/tiku_runtime_arch.h>
+#include <arch/esp32s31/tiku_psram_arch.h>
+#include <kernel/memory/tiku_mem.h>
+#include <malloc.h>
 #include <services/storage/tiku_media_card.h>
 #include <compat/posix/tiku_posix.h>
 #include <string.h>
@@ -152,6 +155,27 @@ int surface_os_desktop_heap_memory(void *memory, size_t bytes)
 void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused, size_t *largest)
 {
     tiku_posix_heap_use(used, total, refused, largest);
+}
+
+size_t surface_os_desktop_heap_live(void)
+{
+    struct mallinfo info = mallinfo();
+
+    return (size_t)info.uordblks;
+}
+
+int surface_os_psram_extent(size_t *size, size_t *below, size_t *tier, size_t *spare)
+{
+    const uint8_t *base;
+    tiku_mem_stats_t stats;
+
+    if (!tiku_thread_in_kernel() ||
+        tiku_tier_span_stats(TIKU_MEM_PSRAM, 0, &base, &stats) != TIKU_MEM_OK) return -1;
+    *size = tiku_s31_psram_size();
+    *below = (size_t)((uintptr_t)base - TIKU_S31_PSRAM_BASE);
+    *tier = stats.total_bytes;
+    *spare = stats.total_bytes > stats.used_bytes ? stats.total_bytes - stats.used_bytes : 0u;
+    return 0;
 }
 
 void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused)

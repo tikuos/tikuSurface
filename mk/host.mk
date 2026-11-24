@@ -268,7 +268,7 @@ LCD_TEST_RUNTIME := $(if $(filter 1,$(SURFACE_IMAGE)),tests/runtime_image.c,$(if
 
 $(BUILD)/test-runtime-lcd: platform/tikuos/media.c platform/tikuos/media.h tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/runtime.c platform/tikuos/runtime.h platform/tikuos/presentation.c platform/tikuos/presentation.h platform/tikuos/display.h $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
 	$(CC) $(FLAGS) -DSURFACE_LCD_ENABLE=1 -Iplatform/tikuos tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/presentation.c platform/tikuos/media.c $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
-test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-posix-layer $(BUILD)/test-board $(BUILD)/test-posix-threads-tsan $(BUILD)/test-posix-threads-asan $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
+test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-posix-layer $(BUILD)/test-board $(BUILD)/test-sys $(BUILD)/test-posix-threads-tsan $(BUILD)/test-posix-threads-asan $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
 	$(BUILD)/test-product-acceptance theme
 	$(BUILD)/test-product-acceptance reset
 	$(BUILD)/test-product-acceptance states
@@ -277,6 +277,7 @@ test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/
 	$(BUILD)/test-gesture
 	$(BUILD)/test-posix-layer
 	$(BUILD)/test-board
+	$(BUILD)/test-sys
 	setarch $(HOST_MACHINE) -R $(BUILD)/test-posix-threads-tsan
 	$(BUILD)/test-posix-threads-asan
 	$(BUILD)/test-surface
@@ -319,6 +320,13 @@ $(BUILD)/test-board: tests/test_board.c desktop/board.c desktop/board.h tests/po
     mk/host.mk | $(BUILD)
 	$(CC) -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread -fsanitize=address,undefined \
 	    -Itests/posix_host -Idesktop -Ifoundation/kits/storage tests/test_board.c desktop/board.c -o $@
+# The system facts the desktop's kits ask of TikuOS, over fake kernel nodes;
+# the kits' headers come from the pinned foundation.
+$(BUILD)/test-sys: tests/test_sys.c desktop/sys.c desktop/bridge.h desktop/bridge_os.h \
+    tests/posix_host/tiku_posix.h mk/host.mk | $(BUILD)
+	$(CC) -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+	    -Itests/posix_host -Idesktop $(addprefix -Ifoundation/kits/,support interface device storage) \
+	    tests/test_sys.c desktop/sys.c -o $@
 # The layer from several threads: once under the thread sanitizer, run
 # without address randomisation, which its memory map does not accept on
 # newer kernels; once under the address sanitizer, whose leak check covers

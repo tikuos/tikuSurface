@@ -125,6 +125,8 @@ static struct {
     uint32_t *jobs;           /* lowest word of the job thread's stack */
     uint32_t jobs_scan;       /* next word its high-water scan examines */
     uint32_t jobs_used;       /* its deepest use found, in bytes */
+    size_t psram, psram_below, psram_tier;  /* PSRAM, below the tier, the tier */
+    size_t psram_spare;       /* the tier's bytes not reserved */
     uint64_t burst_start, last_status;
     int capturing;
     unsigned capture_row;
@@ -972,6 +974,22 @@ static void desktop_thread(void *arg)
     surface_os_desktop_kick();
 }
 
+void surface_desktop_memory(surface_desktop_memory_t *m)
+{
+    m->psram = rt.psram;
+    m->below = rt.psram_below;
+    m->tier = rt.psram_tier;
+    m->spare = rt.psram_spare;
+    m->span = SURFACE_RUNTIME_BYTES;
+    m->frames = 2u * RGB_BYTES;
+    m->stack = STACK_BYTES;
+    m->stack_used = rt.stack_used;
+    m->jobs = JOBS_BYTES;
+    m->jobs_used = rt.jobs_used;
+    m->stages = STAGES_BYTES;
+    m->heap = SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES - JOBS_BYTES - STAGES_BYTES;
+}
+
 int surface_runtime_start(void)
 {
     unsigned char *span, *stack, *jobs, *stages, *heap;
@@ -984,6 +1002,10 @@ int surface_runtime_start(void)
     if (span == NULL) return 0;
     memset(&surface_desktop_bridge, 0, sizeof surface_desktop_bridge);
     memset(&rt, 0, sizeof rt);
+    /* PSRAM's extent, for the About box: figures the kernel gives only its
+     * owner, the tier's free bytes again with each status line. */
+    if (surface_os_psram_extent(&rt.psram, &rt.psram_below, &rt.psram_tier, &rt.psram_spare) != 0)
+        rt.psram = rt.psram_below = rt.psram_tier = rt.psram_spare = 0;
     rt.sample_dump = UINT32_MAX;
     rt.stacks_dump = UINT32_MAX;
     rt.span = span;
@@ -1173,6 +1195,11 @@ int surface_runtime_poll(void)
         unsigned lock_mutexes = 0, lock_conds = 0, lock_refused = 0;
 
         rt.last_status = begin;
+        if (rt.psram > 0u) {
+            size_t size, below, tier;
+
+            (void)surface_os_psram_extent(&size, &below, &tier, &rt.psram_spare);
+        }
         surface_os_display_convert_stats(&ppa_jobs, &ppa_failed, &ppa_wakes, &ppa_us);
         surface_os_desktop_heap_use(&used, &total, &refused, &largest);
         surface_desktop_write_stats(&console, &files, &calls, &last);
