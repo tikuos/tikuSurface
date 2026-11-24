@@ -1084,6 +1084,9 @@ int surface_runtime_poll(void)
         tiku_present_result_t polled = surface_presentation_poll(&rt.presentation);
 
         if (before == 1u) rt.convert_cpu += (uint32_t)(surface_os_time() - call);
+        /* A running PPA job queues the next turn from its interrupt. */
+        if (polled == TIKU_PRESENT_BUSY && rt.presentation.hw && surface_os_display_convert_wakes())
+            break;
         if (polled != TIKU_PRESENT_BUSY) {
             uint64_t t = surface_os_time();
 
@@ -1126,12 +1129,12 @@ int surface_runtime_poll(void)
         size_t used = 0, total = 0, largest = 0;
         uint32_t refused = 0, console = 0, files = 0, calls = 0;
         uint64_t mutations = 0;
-        uint32_t ppa_jobs = 0, ppa_failed = 0;
+        uint32_t ppa_jobs = 0, ppa_failed = 0, ppa_wakes = 0, ppa_us = 0;
         const char *last = "";
         unsigned lock_mutexes = 0, lock_conds = 0, lock_refused = 0;
 
         rt.last_status = begin;
-        surface_os_display_convert_stats(&ppa_jobs, &ppa_failed);
+        surface_os_display_convert_stats(&ppa_jobs, &ppa_failed, &ppa_wakes, &ppa_us);
         surface_os_desktop_heap_use(&used, &total, &refused, &largest);
         surface_desktop_write_stats(&console, &files, &calls, &last);
         (void)tiku_posix_mutations(&mutations);
@@ -1141,7 +1144,7 @@ int surface_runtime_poll(void)
                      " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu canary=%u locks=%u/%u/%u"
                      " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
-                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu\n",
+                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
                      b->event_head, b->event_tail, (unsigned long)b->frame_token,
                      (unsigned long)b->done_token, rt.presentation.phase,
@@ -1159,7 +1162,8 @@ int surface_runtime_poll(void)
                      (unsigned long)rt.convert_cpu_last, (unsigned long)card_requests,
                      (unsigned long)card_polls, (unsigned long)card_last_us, (unsigned long)card_max_us,
                      (unsigned long)(card_total_us / 1000u), (unsigned long)mutations,
-                     (unsigned long)ppa_jobs, (unsigned long)ppa_failed);
+                     (unsigned long)ppa_jobs, (unsigned long)ppa_failed,
+                     (unsigned long)ppa_wakes, (unsigned long)ppa_us);
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);
     }
     if (b->exited == 1) {
@@ -1180,8 +1184,9 @@ int surface_runtime_continue(void)
     surface_desktop_bridge_t *b = &surface_desktop_bridge;
     uint64_t now = surface_os_time();
     /* Conversion and submission continue at once; a frame waiting on the
-     * panel's DMA or on the PPA, or a burst past its bound, waits for the
-     * timer turn, and the desktop has the processor meanwhile. */
+     * panel's DMA, or a burst past its bound, waits for the timer turn, and
+     * one waiting on the PPA for its interrupt or the timer turn; the desktop
+     * has the processor meanwhile. */
     int work = rt.running && (rt.capturing || rt.sample_dump != UINT32_MAX ||
         rt.stacks_dump != UINT32_MAX || (card_pending() && card_urgent()) ||
         (rt.presenting != 0 && ((rt.presentation.phase == 1u && !rt.presentation.hw) ||

@@ -140,6 +140,8 @@ int surface_os_release(void *base);
 uint64_t surface_os_time(void);
 /** @brief Return nonzero in serialized kernel execution outside an interrupt. */
 int surface_os_in_owner(void);
+/** @brief Queue a turn of the owner process; callable from an interrupt. */
+void surface_os_poll_isr(void);
 /** @brief Copy unreserved PSRAM bytes; zero reports an unavailable tier. */
 int surface_os_free_bytes(uint32_t *bytes);
 #endif

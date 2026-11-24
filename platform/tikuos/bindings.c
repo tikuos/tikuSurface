@@ -44,6 +44,9 @@ int surface_os_free_bytes(uint32_t *bytes)
 uint64_t surface_os_time(void)
 { return tiku_clock_usec(); }
 
+void surface_os_poll_isr(void)
+{ tiku_process_poll(&surface_process); }
+
 /** @brief Dispatch bounded owner turns with a timer fallback and queued LCD continuations. */
 TIKU_PROCESS_THREAD(surface_process, ev, data)
 {

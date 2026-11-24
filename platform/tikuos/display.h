@@ -35,8 +35,13 @@ int surface_os_display_convert(unsigned back, const void *pixels, unsigned strid
     unsigned x, unsigned y, unsigned w, unsigned h);
 /** @brief The conversion's state: BUSY, OK, or ERROR once it failed. */
 int surface_os_display_convert_poll(void);
-/** @brief The conversions started, and those that failed or were refused. */
-void surface_os_display_convert_stats(uint32_t *jobs, uint32_t *failed);
+/** @brief Nonzero when a conversion's end queues a turn of the owner process
+ *  from its interrupt; zero leaves it to the timer turns. */
+int surface_os_display_convert_wakes(void);
+/** @brief The conversions started, those that failed or were refused, the
+ *  turns their interrupts queued, and the last one's start to interrupt. */
+void surface_os_display_convert_stats(uint32_t *jobs, uint32_t *failed, uint32_t *wakes,
+    uint32_t *last_us);
 /** @brief Poll a request; REFUSED preserves its ownership and requires recovery. */
 int surface_os_display_poll(uint64_t token);
 /** @brief Observe idle/conversion scanout events; zero requests recovery. */

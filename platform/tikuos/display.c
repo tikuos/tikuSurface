@@ -9,6 +9,7 @@
 #include <arch/esp32s31/tiku_display_arch.h>
 #include <arch/esp32s31/tiku_psram_arch.h>
 #include <arch/esp32s31/tiku_ppa_arch.h>
+#include <arch/esp32s31/tiku_runtime_arch.h>
 
 /* SURFACE_PPA 0 leaves every conversion to the CPU. */
 #ifndef SURFACE_PPA
@@ -19,6 +20,18 @@ static tiku_display_t display;
 static uint16_t *buffers[2];
 static int opened;
 static uint32_t ppa_jobs, ppa_failed;
+static volatile uint32_t ppa_wakes, ppa_last_us;
+static uint64_t ppa_started;
+static int ppa_notified;
+
+/** @brief A PPA job's end, from its interrupt: timed on the 16 MHz system
+ *  timer, then the owner process runs. */
+static void ppa_ended(void)
+{
+    ppa_last_us = (uint32_t)((tiku_s31_time() - ppa_started) / 16u);
+    ppa_wakes++;
+    surface_os_poll_isr();
+}
 
 int surface_os_display_open(uint16_t *front, uint16_t *back)
 {
@@ -26,6 +39,7 @@ int surface_os_display_open(uint16_t *front, uint16_t *back)
     if (tiku_display_init(&display, front, 800, 480) != TIKU_DISPLAY_OK) return 0;
     opened = 1;
     buffers[0] = front; buffers[1] = back;
+    ppa_notified = SURFACE_PPA && tiku_s31_ppa_notify(ppa_ended) == 0;
     uint32_t caps = TIKU_DISPLAY_CAP_FLIP | TIKU_DISPLAY_CAP_ASYNC;
     return (tiku_display_caps() & caps) == caps &&
         tiku_display_set_buffers(&display, front, back) == TIKU_DISPLAY_OK;
@@ -57,6 +71,7 @@ int surface_os_display_convert(unsigned back, const void *pixels, unsigned strid
         return SURFACE_SCANOUT_REFUSED;
     }
     ppa_jobs++;
+    ppa_started = tiku_s31_time();
     return SURFACE_SCANOUT_OK;
 }
 
@@ -70,10 +85,16 @@ int surface_os_display_convert_poll(void)
     return SURFACE_SCANOUT_ERROR;
 }
 
-void surface_os_display_convert_stats(uint32_t *jobs, uint32_t *failed)
+int surface_os_display_convert_wakes(void)
+{ return ppa_notified; }
+
+void surface_os_display_convert_stats(uint32_t *jobs, uint32_t *failed, uint32_t *wakes,
+    uint32_t *last_us)
 {
     *jobs = ppa_jobs;
     *failed = ppa_failed;
+    *wakes = ppa_wakes;
+    *last_us = ppa_last_us;
 }
 
 int surface_os_display_amend(unsigned buffer, unsigned x, unsigned y,
@@ -112,6 +133,8 @@ int surface_os_display_close(void)
     if (!surface_os_in_owner()) return 0;
     if (!opened) return 1;
     if (tiku_s31_display_close(&display) != TIKU_DISPLAY_OK) return 0;
+    if (ppa_notified) (void)tiku_s31_ppa_notify(NULL);
+    ppa_notified = 0;
     opened = 0;
     buffers[0] = buffers[1] = NULL;
     display = (tiku_display_t){0};
