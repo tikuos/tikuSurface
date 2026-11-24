@@ -338,7 +338,12 @@ int main(void)
     assert(b->ops->changes(b, ch, 4, &complete) == 4 && complete == 0);
     lost = 3;
     record("changed\t00000011\t9");
-    assert(b->ops->changes(b, ch, 4, &complete) == 1 && complete == 0);
+    {
+        unsigned long before = surface_board_lost();
+
+        assert(b->ops->changes(b, ch, 4, &complete) == 1 && complete == 0);
+        assert(surface_board_lost() == before + 3u);
+    }
     assert(b->ops->changes(b, ch, 4, &complete) == 0 && complete == 1);
 
     b->ops->close(b);

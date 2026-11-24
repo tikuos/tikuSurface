@@ -445,6 +445,11 @@ static uint64_t folder_of(const board_t *b, uint32_t id)
     return dir != NULL ? dir->id : BOARD_ROOT_ID;
 }
 
+/* Records the desktop's readers of the change ring lost, for the status line. */
+static volatile unsigned long board_lost;
+
+unsigned long surface_board_lost(void) { return board_lost; }
+
 /** @brief The records since the last ask, from this backend's own reader of
  *  the kernel's change ring, each a change under the folder it touches, so
  *  only views at or below that folder re-list; a record other than
@@ -471,6 +476,7 @@ static int bd_changes(tiku_backend_t *be, tiku_model_change_t *out, int max, int
 
             if (sscanf(p, "# %lu read, %lu lost", &n, &lost) == 2) {
                 if (lost != b->lost) {
+                    if (lost > b->lost) board_lost += lost - b->lost;
                     b->lost = lost;
                     if (complete != NULL) *complete = 0;
                 }

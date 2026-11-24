@@ -18,4 +18,8 @@ struct tiku_backend *surface_board_open(char *name, size_t max);
  *  reads /sys/uptime within the monotonic clock, lists /sys and the root
  *  with distinct identities, and refuses a write to /sys/uptime. */
 void surface_board_selftest(void);
+
+/** @brief Change records the desktop's board readers missed since the start,
+ *  because the kernel's ring overwrote them first; any thread. */
+unsigned long surface_board_lost(void);
 #endif

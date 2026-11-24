@@ -1183,7 +1183,7 @@ int surface_runtime_poll(void)
                      " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu canary=%u locks=%u/%u/%u"
                      " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
-                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu\n",
+                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu ring_lost=%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
                      b->event_head, b->event_tail, (unsigned long)b->frame_token,
                      (unsigned long)b->done_token, rt.presentation.phase,
@@ -1202,7 +1202,7 @@ int surface_runtime_poll(void)
                      (unsigned long)card_polls, (unsigned long)card_last_us, (unsigned long)card_max_us,
                      (unsigned long)(card_total_us / 1000u), (unsigned long)mutations,
                      (unsigned long)ppa_jobs, (unsigned long)ppa_failed,
-                     (unsigned long)ppa_wakes, (unsigned long)ppa_us);
+                     (unsigned long)ppa_wakes, (unsigned long)ppa_us, surface_board_lost());
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);
     }
     if (b->exited == 1) {
