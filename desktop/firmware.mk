@@ -77,12 +77,14 @@ APPL_CHECK_ELF = python3 $(SURFACE_ROOT)/tools/desktop_placement.py --elf $@ --m
     && python3 $(SURFACE_ROOT)/tools/libc_stubs.py --elf $@ --map $(S31_DIR)/kernel.map
 
 # The runtime's entry points and the C-library system calls the desktop
-# supplies; the archive contributes only the objects these reach.
+# supplies; the archive contributes only the objects these reach.  The
+# shell asks for the built-in applications by a weak reference, which takes
+# no object out of an archive, so desktop/builtins.c's list is a root too.
 DESKTOP_ROOTS := surface_runtime_start surface_runtime_stop surface_runtime_poll \
     surface_runtime_continue surface_runtime_launch surface_runtime_calibrate \
     surface_runtime_calibration surface_runtime_preferences surface_runtime_set_preferences \
     surface_runtime_stats surface_runtime_frame_stats surface_runtime_input_stats \
-    surface_runtime_fail_at surface_touch_map_valid _open
+    surface_runtime_fail_at surface_touch_map_valid _open tiku_trk_builtins
 # SURFACE_HEAP_PROFILE=1 records the desktop's heap blocks by call site; the
 # control file's "heap" command prints them.
 SURFACE_HEAP_PROFILE ?= 0

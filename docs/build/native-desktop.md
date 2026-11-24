@@ -84,6 +84,22 @@ returns `EROFS`. Tracker lists it as a volume in the root window.
 `/dev/urandom` and `/dev/random` return SHA-256 counter-mode
 output from a key seeded once at start. Tracker starts with image thumbnails off.
 
+## Applications
+
+`desktop/builtins.c` lists the applications linked into the desktop, which
+open their windows in its own workspace: TikuImage, from Stomme's
+`packages/apps/apps/image`, for PNG, JPEG and BMP files. The launcher hands
+it a document Tracker opens through its host for built-in applications. Its
+window fills the screen below the bar, and it decodes each
+picture no larger than its view, after letting the one shown go: a baseline
+JPEG of one scan is converted a row of MCUs at a time, its planes reduced to
+a half, quarter or eighth of each block by the means of the samples they
+cover, so a 1640 by 1232 photo needs the file's bytes, its 427 by 321
+pixels and a few kilobytes of planes. A PNG or BMP is decoded whole first. The view is
+painted a row at a time with no cache. On the panel at 320 MHz the 176 KiB
+`camera-1640x1232.jpg` on the card takes 2.1 s to read and 2.0 s to decode.
+The Open button is unavailable; pictures are opened from Tracker.
+
 ## Limits
 
 `DESKTOP_LIMITS` in `desktop/desktop.mk` sizes the shell for the panel's PSRAM:

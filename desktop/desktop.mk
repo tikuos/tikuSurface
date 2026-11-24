@@ -70,7 +70,14 @@ DESKTOP_CFLAGS := $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOU
 # and in the kits.  Possible truncation by snprintf stays a warning.
 DESKTOP_FORMAT_CFLAGS := -Werror=format -Wno-error=format-truncation
 
-DESKTOP_OBJS := $(addprefix $(DESKTOP_BUILD)/shell/,$(DESKTOP_SHELL_SRCS:.c=.o)) \
+# Windows of Stomme's applications linked into the desktop, which opens
+# them in its own workspace (desktop/builtins.c lists them).
+DESKTOP_APP_SRCS := apps/image/tiku_image_window.c
+DESKTOP_APP_INCLUDES := -I$(F)/packages/apps/apps/image -I$(F)/packages/apps/apps/shared \
+    -I$(DESKTOP_ASSETS)/apps/shared
+
+DESKTOP_OBJS := $(addprefix $(DESKTOP_BUILD)/apps/,$(DESKTOP_APP_SRCS:.c=.o)) \
+    $(addprefix $(DESKTOP_BUILD)/shell/,$(DESKTOP_SHELL_SRCS:.c=.o)) \
     $(addprefix $(DESKTOP_BUILD)/kits/,$(DESKTOP_KIT_SRCS:.c=.o)) \
     $(DESKTOP_BUILD)/assets/tiku_icons_tiku.o $(DESKTOP_BUILD)/fonts/tiku_font.o \
     $(addprefix $(DESKTOP_BUILD)/surface/,$(DESKTOP_SURFACE_SRCS:.c=.o)) \
@@ -97,12 +104,16 @@ $(DESKTOP_BUILD)/shell/system/shared/shell/tiku_trk_launcher.o: private DESKTOP_
 $(DESKTOP_BUILD)/shell/%.o: $(F)/packages/shell/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_FORMAT_CFLAGS) $(DESKTOP_EXTRA) -MMD -MP -c -o $@ $<
+$(DESKTOP_BUILD)/apps/%.o: $(F)/packages/apps/%.c $(DESKTOP_HEADERS)
+	@mkdir -p $(@D)
+	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_APP_INCLUDES) $(DESKTOP_FORMAT_CFLAGS) -MMD -MP -c -o $@ $<
 $(DESKTOP_BUILD)/kits/%.o: $(F)/kits/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_FORMAT_CFLAGS) -MMD -MP -c -o $@ $<
 $(DESKTOP_BUILD)/assets/tiku_icons_tiku.o: $(DESKTOP_ASSETS)/kits/translation/tiku_icons_tiku.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) -MMD -MP -c -o $@ $<
+$(DESKTOP_BUILD)/platform/builtins.o: private DESKTOP_CFLAGS += $(DESKTOP_APP_INCLUDES)
 $(DESKTOP_BUILD)/platform/%.o: $(DESKTOP_ROOT)/desktop/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) -MMD -MP -c -o $@ $<
