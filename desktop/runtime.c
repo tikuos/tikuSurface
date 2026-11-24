@@ -303,10 +303,49 @@ static int card_finished(void *context)
  * bridge carries one at a time. */
 static pthread_mutex_t card_turn = PTHREAD_MUTEX_INITIALIZER;
 
+#define CARD_NOW_US 5000000u    /* a start-up card request's limit */
+
+/** @brief Run card request @p io to its end on the kernel thread, which
+ *  asks only while the desktop starts, before its threads run: the bridge
+ *  is polled here until the request ends, or cancelled past CARD_NOW_US. */
+static void card_now(surface_media_io_t *io)
+{
+    uint64_t began = surface_os_time();
+    int r;
+
+    while ((r = surface_os_media_submit(card_bridge, io)) == SURFACE_MEDIA_BUSY) {
+        (void)surface_os_media_poll(card_bridge);
+        if (surface_os_time() - began > CARD_NOW_US) {
+            io->result = SURFACE_MEDIA_UNAVAILABLE;
+            return;
+        }
+    }
+    if (r != SURFACE_MEDIA_OK) {
+        io->result = r;
+        return;
+    }
+    while (!surface_os_media_poll(card_bridge)) {
+        if (surface_os_time() - began > CARD_NOW_US) {
+            began = surface_os_time();
+            while (!surface_os_media_cancel(card_bridge) && surface_os_time() - began < CARD_NOW_US) {
+            }
+            io->result = SURFACE_MEDIA_UNAVAILABLE;
+            return;
+        }
+    }
+}
+
+unsigned surface_desktop_card_foreign(void) { return surface_os_media_foreign(card_bridge); }
+
 void surface_desktop_card(surface_media_io_t *io)
 {
     surface_desktop_bridge_t *b = &surface_desktop_bridge;
 
+    if (surface_os_in_owner()) {
+        if (!b->card_mounted) io->result = SURFACE_MEDIA_UNAVAILABLE;
+        else card_now(io);
+        return;
+    }
     (void)pthread_mutex_lock(&card_turn);
     b->card = io;
     b->card_foreground = surface_os_in_desktop();

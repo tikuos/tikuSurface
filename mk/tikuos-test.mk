@@ -47,9 +47,25 @@ MEDIA_CORE := $(TIKUOS_ROOT)/kernel/fs/tiku_mfs.c $(TIKUOS_ROOT)/kernel/fs/tiku_
 $(BUILD)/test-media: tests/tikuos/test_media.c platform/tikuos/media.c platform/tikuos/media_io.c $(MEDIA_CORE) $(HOST) $(PRODUCT) $(HEADERS) $(TIKUOS_ROOT)/kernel/fs/tiku_mfs.h $(TIKUOS_ROOT)/services/storage/tiku_media_store.h $(TIKUOS_ROOT)/services/storage/tiku_media_async.h $(TIKUOS_ROOT)/services/storage/tiku_media_card.h $(TIKUOS_ROOT)/kernel/fs/tiku_mfs_query.h mk/tikuos-test.mk | $(BUILD)
 	$(CC) $(FLAGS) -DTIKU_MEDIA_DIRECTORIES_ENABLE=$(SURFACE_DIRECTORIES) -DTIKU_MEDIA_NAMES_ENABLE=1 -DTIKU_MEDIA_ASYNC_ENABLE=1 -Iplatform/tikuos -I$(TIKUOS_ROOT) $(filter %.c,$^) $(SDK_LIBRARIES) -o $@
 .PHONY: media-test
-media-test: $(BUILD)/test-media $(BUILD)/test-media-transfer-browser
+media-test: $(BUILD)/test-media $(BUILD)/test-media-transfer-browser $(BUILD)/test-posix-card
 	$(BUILD)/test-media
 	$(BUILD)/test-media-transfer-browser
+	$(BUILD)/test-posix-card
+
+# The desktop's file layer writing to the card: desktop/posix.c built as for
+# test-posix-layer, over the real bridge, media service and MFS on a RAM disk
+# (tests/tikuos/card_fixture.c), both under the address sanitizer.
+CARD_FIXTURE_FLAGS := -std=gnu11 -Wall -Wextra -Werror -O1 -g -fno-omit-frame-pointer \
+    -fsanitize=address,undefined -DTIKU_MEDIA_DIRECTORIES_ENABLE=0 -DTIKU_MEDIA_NAMES_ENABLE=1 \
+    -DTIKU_MEDIA_ASYNC_ENABLE=1 -Iplatform/tikuos -I$(TIKUOS_ROOT)
+$(BUILD)/test-posix-card: tests/test_posix_card.c desktop/posix.c desktop/bridge.h desktop/bridge_os.h \
+    tests/tikuos/card_fixture.c tests/tikuos/card_fixture.h platform/tikuos/media_io.c platform/tikuos/media_io.h \
+    $(MEDIA_CORE) $(wildcard tests/posix_host/*.h) mk/tikuos-test.mk | $(BUILD)
+	$(CC) $(CARD_FIXTURE_FLAGS) -c tests/tikuos/card_fixture.c -o $(BUILD)/card-fixture.o
+	$(CC) $(CARD_FIXTURE_FLAGS) -c platform/tikuos/media_io.c -o $(BUILD)/card-media-io.o
+	$(foreach f,$(MEDIA_CORE),$(CC) $(CARD_FIXTURE_FLAGS) -c $(f) -o $(BUILD)/card-$(notdir $(f:.c=.o)) &&) true
+	$(CC) $(POSIX_LAYER_FLAGS) -Itests tests/test_posix_card.c desktop/posix.c $(BUILD)/card-fixture.o \
+	    $(BUILD)/card-media-io.o $(foreach f,$(MEDIA_CORE),$(BUILD)/card-$(notdir $(f:.c=.o))) -o $@
 
 $(BUILD)/test-media-transfer-browser: tests/tikuos/test_media_transfer_browser.c tests/tikuos/test_media.c platform/tikuos/media.c platform/tikuos/media_io.c $(MEDIA_CORE) $(TIKUOS_ROOT)/services/storage/tiku_media_transfer.c $(TIKUOS_ROOT)/services/storage/tiku_media_transfer.h $(HOST) $(PRODUCT) $(HEADERS) mk/tikuos-test.mk | $(BUILD)
 	$(CC) $(FLAGS) -DTIKU_MEDIA_DIRECTORIES_ENABLE=$(SURFACE_DIRECTORIES) -DTIKU_MEDIA_NAMES_ENABLE=1 -DTIKU_MEDIA_ASYNC_ENABLE=1 -Iplatform/tikuos -I$(TIKUOS_ROOT) $(filter-out tests/tikuos/test_media.c,$(filter %.c,$^)) $(SDK_LIBRARIES) -o $@

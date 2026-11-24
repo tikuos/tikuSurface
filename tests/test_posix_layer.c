@@ -44,6 +44,7 @@ char *realpath(const char *path, char *resolved);
 surface_desktop_bridge_t surface_desktop_bridge;
 char **environ;
 void surface_desktop_card(surface_media_io_t *io) { io->result = SURFACE_MEDIA_UNAVAILABLE; }
+unsigned surface_desktop_card_foreign(void) { return 0; }
 void surface_desktop_log(const void *bytes, size_t length) { (void)bytes; (void)length; }
 static uint64_t test_now_us = 1000000u;
 uint64_t surface_desktop_now_us(void) { return test_now_us; }
@@ -433,14 +434,25 @@ int main(void)
 
     assert(surface_desktop_files() == 0);
 
-    /* Desktop and Documents say the home is not kept, read-only. */
+    /* Without a card, Desktop and Documents say so and take nothing new:
+     * no file, folder or rename, and their files take no writer. */
     {
         struct stat st;
 
-        assert(_stat("/home/Desktop/Files here are lost at restart.txt", &st) == 0);
+        assert(_stat("/home/Desktop/No SD card - nothing is saved here.txt", &st) == 0);
         assert(S_ISREG(st.st_mode) && (st.st_mode & 0222) == 0 && st.st_size > 0);
-        assert(_stat("/home/Documents/Files here are lost at restart.txt", &st) == 0);
+        assert(_stat("/home/Documents/No SD card - nothing is saved here.txt", &st) == 0);
         assert((st.st_mode & 0222) == 0);
+        assert(_open("/home/Documents/new.txt", O_WRONLY | O_CREAT, 0644) == -1 && errno == EROFS);
+        assert(_stat("/home/Documents/new.txt", &st) == -1 && errno == ENOENT);
+        assert(_open("/home/Documents/Welcome.txt", O_WRONLY, 0) == -1 && errno == EROFS);
+        assert(mkdir("/home/Desktop/folder", 0755) == -1 && errno == EROFS);
+        assert(_unlink("/home/Documents/Welcome.txt") == -1 && errno == EROFS);
+        assert(_rename("/home/Documents/Welcome.txt", "/tmp/Welcome.txt") == -1 && errno == EROFS);
+        touch("/tmp/moved-in");
+        assert(_rename("/tmp/moved-in", "/home/Desktop/moved-in") == -1 && errno == EROFS);
+        assert(rmdir("/home/Desktop") == -1 && errno == EROFS);
+        assert(_unlink("/tmp/moved-in") == 0);
     }
 
     /* A descriptor's writes count as a change at its first write and at
@@ -547,7 +559,7 @@ int main(void)
     test_settings_store();
     test_attributes();
     test_changes();
-    puts("posix layer: the home's note is seeded; directory streams outlive the "
+    puts("posix layer: without a card the home's folders say so and take nothing new; directory streams outlive the "
          "entries they reach; files have no date while the clock is unset; "
          "the kernel's namespace is not in the tree; the settings files are the store's; "
          "the start-up folders' attributes are kept in the store; changes name their "

@@ -51,12 +51,28 @@ time dimmed, with a question mark, until the clock is set again.
 
 ## Files
 
-The desktop's files live in a tree in its heap: `/home` with `Desktop`,
-`Documents` and `.config/tracker`, its settings and the `/proc` files the
-volume kit reads. The tree is built again at each start, and a read-only
-`Files here are lost at restart.txt` in `Desktop` and `Documents` says so. `/Card` shows the SD
-card's media volume read-only through the queued media bridge; a write there
-returns `EROFS`. `/Board` is the kernel's namespace, `/sys`, `/dev`, `/data`
+The desktop's files live in a tree in its heap, built again at each start,
+with its settings in the store and the `/proc` files the volume kit reads.
+With an SD card in the board, `/home` is the card's `home` folder: `Desktop`,
+`Documents`, the Trash and each file saved there are card objects, made the
+first time the desktop starts with that card, while `.config` and `.local`
+stay in the tree. `/Card` shows the rest of the card's media volume through
+the queued media bridge. A card file opened to write holds its bytes in its
+node and is published whole at `fsync()` or `close()`, one atomic replacement
+of at most 64 KiB; a larger file is refused with `EFBIG`. Renames, deletes
+and folders reach the card. A folder keeps a hidden empty `.folder` object,
+so it stays after a restart when empty, and renaming one renames each object
+under it, putting them back in turn when one is refused. A card Trash keeps
+its items' original paths in a hidden `.origins` object, so Restore works
+after a restart. A move between the card and the tree's own folders returns
+`EXDEV`, and Tracker copies instead. After another client changes the card,
+such as the shell's `media` command or a computer transfer, a file is found
+again by name before it is next opened, renamed or deleted: one that is gone
+returns `ENOENT` and leaves its folder, and one replaced refuses its first
+rename or delete with `ESTALE`. A folder shows a file another client added
+after the next start. Without a card, `Desktop` and
+`Documents` are in the tree, take no new file and hold a read-only
+`No SD card - nothing is saved here.txt`. `/Board` is the kernel's namespace, `/sys`, `/dev`, `/data`
 and the rest, read through TikuOS's `compat/posix` (`desktop/firmware.mk`
 selects it and leaves the library's own file hooks out); a change under it
 returns `EROFS`. Tracker lists it as a volume in the root window.

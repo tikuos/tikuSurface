@@ -16,6 +16,9 @@ typedef struct {
     _Alignas(8) unsigned char read_state[SURFACE_MEDIA_READ_BYTES];
     _Alignas(8) unsigned char mutation_state[SURFACE_MEDIA_MUTATION_BYTES];
     unsigned ready;
+    unsigned answered;          /* the view was answered at its submission */
+    uint64_t known;             /* the card's names epoch, accounted for */
+    volatile unsigned foreign;  /* name changes this bridge did not make */
 } media_bridge_t;
 _Static_assert(sizeof(media_bridge_t)<=SURFACE_MEDIA_BRIDGE_BYTES,"Media bridge exceeds runtime reservation");
 
@@ -41,13 +44,49 @@ static int status(int r)
     if (r == TIKU_MFS_STALE) return SURFACE_MEDIA_STALE;
     if (r == TIKU_MFS_ARG) return SURFACE_MEDIA_INVALID;
     if (r == TIKU_MFS_LIMIT) return SURFACE_MEDIA_LIMIT;
+    if (r == TIKU_MFS_SPACE) return SURFACE_MEDIA_FULL;
     if (r == TIKU_MFS_UNSUPPORTED) return SURFACE_MEDIA_UNSUPPORTED;
     return SURFACE_MEDIA_UNAVAILABLE;
+}
+
+/** @brief Account for the card's names epoch: any change since the last
+ *  account beyond @p own of this bridge's own was another client's. */
+static void account(media_bridge_t *b, uint64_t own)
+{
+    tiku_media_store_t *s = tiku_media_card_store();
+    uint64_t e = s && s->fs ? tiku_mfs_names_epoch(s->fs) : 0;
+
+    if (e == 0) return;
+    if (b->known != 0 && e != b->known && e - b->known > own) b->foreign++;
+    b->known = e;
+}
+
+/** @brief Answer a space request from the mounted volume: its bytes, and
+ *  the bytes a writer may use past the catalog's reserve. */
+static int space(media_bridge_t *b, surface_media_io_t *v)
+{
+    tiku_media_store_t *s = tiku_media_card_store();
+    if (!s || !s->fs || !s->fs->mounted) return SURFACE_MEDIA_UNAVAILABLE;
+    const tiku_mfs_t *f = s->fs;
+    uint64_t sectors = (uint64_t)f->free_segments * TIKU_MFS_SEGMENT +
+        (f->tail % TIKU_MFS_SEGMENT ? TIKU_MFS_SEGMENT - f->tail % TIKU_MFS_SEGMENT : 0);
+    v->offset = (uint64_t)f->segments * TIKU_MFS_SEGMENT * 512u;
+    v->size = sectors > TIKU_MFS_SEGMENT ? (sectors - TIKU_MFS_SEGMENT) * 512u : 0;
+    v->result = SURFACE_MEDIA_OK;
+    b->answered = 1;
+    b->view = v;
+    return SURFACE_MEDIA_OK;
 }
 
 int surface_os_media_submit(void *data, surface_media_io_t *v)
 {
     media_bridge_t *b = data;
+    if (b && b->ready && !b->view && surface_os_in_owner()) account(b, 0);
+    if (b && v && surface_os_in_owner() && v->operation == SURFACE_MEDIA_SPACE) {
+        if (!b->ready) return SURFACE_MEDIA_UNAVAILABLE;
+        if (b->view) return SURFACE_MEDIA_BUSY;
+        return space(b, v);
+    }
     if (!b || !v || !surface_os_in_owner() || v->operation > (SURFACE_DIRECTORIES?SURFACE_MEDIA_TREE_COPY:SURFACE_MEDIA_REPLACE) ||
         v->length > ((v->operation==SURFACE_MEDIA_REPLACE||v->operation==SURFACE_MEDIA_TREE_COPY)?65536u:1024u))
         return SURFACE_MEDIA_INVALID;
@@ -103,6 +142,11 @@ int surface_os_media_poll(void *data)
         if (b->store && b->store->count) progress(b);
         return 0;
     }
+    if (b->answered) {
+        b->answered = 0;
+        b->view = NULL;
+        return 1;
+    }
     if (!b->request.done || !idle(b)) progress(b);
 #if SURFACE_DIRECTORIES
     if(b->view->operation==SURFACE_MEDIA_TREE_COPY){b->view->prepared=b->request.prepared;b->view->total=b->request.total;}
@@ -128,6 +172,8 @@ int surface_os_media_poll(void *data)
 #endif
     }
     if (v->operation >= SURFACE_MEDIA_RENAME && !r) {v->epoch = b->store->fs->names_epoch;v->id=b->request.id;}
+    /* A rename, delete or replace changes the names once. */
+    account(b, v->operation >= SURFACE_MEDIA_RENAME && v->operation <= SURFACE_MEDIA_REPLACE && !r);
     b->view = NULL;
     return 1;
 }
@@ -136,13 +182,24 @@ int surface_os_media_idle(void *data)
 {
     media_bridge_t *b = data;
     if (!b || !b->ready || !surface_os_in_owner() || b->view) return 0;
+    account(b, 0);
     return tiku_media_card_park_expire();
+}
+
+unsigned surface_os_media_foreign(const void *data)
+{
+    const media_bridge_t *b = data;
+    return b ? b->foreign : 0u;
 }
 
 int surface_os_media_cancel(void *data)
 {
     media_bridge_t *b = data;
     if (!b || !b->ready || !surface_os_in_owner()) return 0;
+    if (b->answered) {
+        b->answered = 0;
+        b->view = NULL;
+    }
     if (b->view && !b->request.done && b->view->operation != SURFACE_MEDIA_CLOSE) {
         int r = b->view->operation >= SURFACE_MEDIA_RENAME ?
             tiku_media_card_mutation_cancel(b->mutation_state, b->store, &b->request) :

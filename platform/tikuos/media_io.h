@@ -15,12 +15,17 @@
 /** @brief Retained state slots for the firmware card owners. */
 #define SURFACE_MEDIA_READ_BYTES 6144u
 #define SURFACE_MEDIA_MUTATION_BYTES 8192u
-/** @brief Operations advance through the firmware's serialized storage queue. */
+/** @brief Operations advance through the firmware's serialized storage queue.
+ *  SPACE is answered at once from the mounted volume: offset is its size in
+ *  bytes and size the bytes a writer may still use. */
 enum { SURFACE_MEDIA_ENUMERATE, SURFACE_MEDIA_OPEN, SURFACE_MEDIA_READ, SURFACE_MEDIA_CLOSE,
-    SURFACE_MEDIA_RENAME, SURFACE_MEDIA_DELETE, SURFACE_MEDIA_REPLACE, SURFACE_MEDIA_MKDIR, SURFACE_MEDIA_TREE_RENAME, SURFACE_MEDIA_TREE_DELETE, SURFACE_MEDIA_DIRECTORY_UPGRADE, SURFACE_MEDIA_TREE_COPY };
-/** @brief Result codes copied without exposing filesystem types to SDK consumers. */
+    SURFACE_MEDIA_RENAME, SURFACE_MEDIA_DELETE, SURFACE_MEDIA_REPLACE, SURFACE_MEDIA_MKDIR, SURFACE_MEDIA_TREE_RENAME, SURFACE_MEDIA_TREE_DELETE, SURFACE_MEDIA_DIRECTORY_UPGRADE, SURFACE_MEDIA_TREE_COPY,
+    SURFACE_MEDIA_SPACE };
+/** @brief Result codes copied without exposing filesystem types to SDK
+ *  consumers; FULL is a volume without room for the change. */
 enum { SURFACE_MEDIA_OK, SURFACE_MEDIA_END, SURFACE_MEDIA_BUSY, SURFACE_MEDIA_STALE,
-    SURFACE_MEDIA_UNAVAILABLE, SURFACE_MEDIA_INVALID, SURFACE_MEDIA_UNSUPPORTED, SURFACE_MEDIA_LIMIT };
+    SURFACE_MEDIA_UNAVAILABLE, SURFACE_MEDIA_INVALID, SURFACE_MEDIA_UNSUPPORTED, SURFACE_MEDIA_LIMIT,
+    SURFACE_MEDIA_FULL };
 /** @brief One caller-owned operation retained until poll reports completion. */
 typedef struct {
     unsigned operation, exclusive;
@@ -48,4 +53,8 @@ int surface_os_media_cancel(void *);
  *  parked longer than the build's linger; 0, or TIKU_MFS_BUSY or
  *  TIKU_MFS_IO from closing it. */
 int surface_os_media_idle(void *);
+/** @brief Changes to the card's names this bridge did not make, counted at
+ *  its submissions, completions and idle turns since it was initialized;
+ *  read from any thread. */
+unsigned surface_os_media_foreign(const void *);
 #endif

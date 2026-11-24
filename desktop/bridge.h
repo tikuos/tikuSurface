@@ -76,6 +76,9 @@ void surface_desktop_hash_poll(void);
 /** @brief Run one SD card request on the kernel's media bridge and wait for
  *  it; @p io's result field holds the outcome. */
 void surface_desktop_card(surface_media_io_t *io);
+/** @brief Changes made to the card's names by another client since the
+ *  desktop started, as the kernel's turns count them; any thread. */
+unsigned surface_desktop_card_foreign(void);
 /** @brief Monotonic microseconds since boot. */
 uint64_t surface_desktop_now_us(void);
 

@@ -75,6 +75,7 @@ void surface_desktop_card(surface_media_io_t *io)
         io->size = objects[i].size;
         io->epoch = 1u;
         io->rank = i;
+        io->id = i + 1u;
         break;
     }
     case SURFACE_MEDIA_OPEN: {
@@ -100,6 +101,8 @@ void surface_desktop_card(surface_media_io_t *io)
         reads_done++;
         break;
     }
+    case SURFACE_MEDIA_DELETE:
+        break;
     case SURFACE_MEDIA_CLOSE:
         assert(reader_of[io->reader - 1u] >= 0);
         reader_of[io->reader - 1u] = -1;
@@ -151,6 +154,7 @@ static unsigned card_value(unsigned *what)
 /*---------------------------------------------------------------------------*/
 
 surface_desktop_bridge_t surface_desktop_bridge;
+unsigned surface_desktop_card_foreign(void) { return 0; }
 char **environ;
 void surface_desktop_log(const void *bytes, size_t length) { (void)bytes; (void)length; }
 uint64_t surface_desktop_now_us(void) { return 1000000u; }
@@ -256,6 +260,17 @@ static void *lists(void *arg)
     return NULL;
 }
 
+static void *writes(void *arg)
+{
+    job_t *j = arg;
+
+    j->fd = _open(j->path, O_WRONLY | O_TRUNC, 0);
+    j->err = errno;
+    if (j->fd >= 0) j->got = _close(j->fd);
+    __atomic_store_n(&j->done, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
+
 static int done(const job_t *j) { return __atomic_load_n(&j->done, __ATOMIC_SEQ_CST); }
 
 /* rename.h hands nanosleep() to the layer, whose sleep returns at once;
@@ -281,6 +296,18 @@ static int bytes_are(const unsigned char *buf, size_t n, unsigned o, uint64_t at
 
 int mkstemp(char *tmpl);
 int _rename(const char *old, const char *new);
+int _unlink(const char *path);
+int _stat(const char *path, struct stat *st);
+
+static void *unlinks(void *arg)
+{
+    job_t *j = arg;
+
+    j->got = _unlink(j->path);
+    j->err = errno;
+    __atomic_store_n(&j->done, 1, __ATOMIC_SEQ_CST);
+    return NULL;
+}
 
 /* A save of a settings file through a temporary, as Stomme's is. */
 static void *saves(void *arg)
@@ -402,9 +429,44 @@ int main(void)
         fake_during = NULL;
         assert(fake_holds("ts/settings", "DarkMode 1\n"));
     }
+    /* While one thread's delete of a card file waits for the card, another
+     * asks to delete it too: the second finds it gone. */
+    {
+        static job_t one = { .path = "/Card/dir/b.txt" }, two = { .path = "/Card/dir/b.txt" };
+        struct stat st;
+
+        assert(_stat("/Card/dir/b.txt", &st) == 0);
+        hold(SURFACE_MEDIA_DELETE);
+        pthread_create(&a, NULL, unlinks, &one);
+        await_waiting(1);
+        pthread_create(&b, NULL, unlinks, &two);
+        pause_ms(50);
+        assert(!done(&two));
+        let_go(SURFACE_MEDIA_DELETE);
+        pthread_join(a, NULL);
+        pthread_join(b, NULL);
+        assert(one.got == 0 && two.got == -1 && two.err == ENOENT);
+        assert(_stat("/Card/dir/b.txt", &st) == -1 && errno == ENOENT);
+    }
+    /* While one thread's delete of a card file waits for the card, another
+     * opens it to write: the open finds it gone. */
+    {
+        static job_t one = { .path = "/Card/dir/c.txt" }, two = { .path = "/Card/dir/c.txt", .fd = -1 };
+
+        hold(SURFACE_MEDIA_DELETE);
+        pthread_create(&a, NULL, unlinks, &one);
+        await_waiting(1);
+        pthread_create(&b, NULL, writes, &two);
+        pause_ms(50);
+        assert(!done(&two));
+        let_go(SURFACE_MEDIA_DELETE);
+        pthread_join(a, NULL);
+        pthread_join(b, NULL);
+        assert(one.got == 0 && two.fd == -1 && two.err == ENOENT);
+    }
     assert(card_value(&waiting) == 0u);
     printf("posix threads: a listing is shared, the tree is free during a card read, "
            "a close waits for its descriptor's read, a file's first bytes are kept once, "
-           "a settings file reads while its save waits\n");
+           "a settings file reads while its save waits, a card file two threads delete is deleted once, a card file opened to write while it is deleted is gone\n");
     return 0;
 }
