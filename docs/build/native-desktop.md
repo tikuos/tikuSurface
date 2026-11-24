@@ -59,7 +59,12 @@ first time the desktop starts with that card, while `.config` and `.local`
 stay in the tree. `/Card` shows the rest of the card's media volume through
 the queued media bridge. A card file opened to write holds its bytes in its
 node and is published whole at `fsync()` or `close()`, one atomic replacement
-of at most 64 KiB; a larger file is refused with `EFBIG`. Renames, deletes
+of at most 64 KiB. A larger file is written front to back: its bytes stream
+into a hidden object at the card's root in 64 KiB pieces, `fsync()` commits
+them there, and at `close()` the object takes the file's name in one store
+transaction, so the old version stays whole until then; while it streams,
+a read of the file returns `EBUSY`. A hidden object left by a cut is removed
+before the next large write. Renames, deletes
 and folders reach the card. A folder keeps a hidden empty `.folder` object,
 so it stays after a restart when empty, and renaming one renames each object
 under it, putting them back in turn when one is refused. A card Trash keeps

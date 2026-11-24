@@ -16,11 +16,15 @@
 #define SURFACE_MEDIA_READ_BYTES 6144u
 #define SURFACE_MEDIA_MUTATION_BYTES 8192u
 /** @brief Operations advance through the firmware's serialized storage queue.
- *  SPACE is answered at once from the mounted volume: offset is its size in
- *  bytes and size the bytes a writer may still use. */
+ *  SPACE answers at once: offset is the volume's bytes, size a writer's.
+ *  BEGIN starts stream name (its id comes back), RESUME takes stream id up,
+ *  APPEND adds up to 64 KiB, SYNC commits, FINALIZE completes, RELEASE gives
+ *  the writer up; DISCARD removes unfinished object id named name; RENAME_OVER
+ *  moves id from name to destination over visible file offset (0: none). */
 enum { SURFACE_MEDIA_ENUMERATE, SURFACE_MEDIA_OPEN, SURFACE_MEDIA_READ, SURFACE_MEDIA_CLOSE,
     SURFACE_MEDIA_RENAME, SURFACE_MEDIA_DELETE, SURFACE_MEDIA_REPLACE, SURFACE_MEDIA_MKDIR, SURFACE_MEDIA_TREE_RENAME, SURFACE_MEDIA_TREE_DELETE, SURFACE_MEDIA_DIRECTORY_UPGRADE, SURFACE_MEDIA_TREE_COPY,
-    SURFACE_MEDIA_SPACE };
+    SURFACE_MEDIA_SPACE, SURFACE_MEDIA_BEGIN, SURFACE_MEDIA_RESUME, SURFACE_MEDIA_APPEND, SURFACE_MEDIA_SYNC,
+    SURFACE_MEDIA_FINALIZE, SURFACE_MEDIA_RELEASE, SURFACE_MEDIA_DISCARD, SURFACE_MEDIA_RENAME_OVER };
 /** @brief Result codes copied without exposing filesystem types to SDK
  *  consumers; FULL is a volume without room for the change. */
 enum { SURFACE_MEDIA_OK, SURFACE_MEDIA_END, SURFACE_MEDIA_BUSY, SURFACE_MEDIA_STALE,

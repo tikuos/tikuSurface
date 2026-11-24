@@ -192,6 +192,22 @@ media-replace-test: $(BUILD)/test-media-replace
 media-test: media-replace-test
 -include $(BUILD)/test-media-replace.d
 
+$(BUILD)/test-media-discard: tests/tikuos/test_media_discard.c tests/tikuos/test_media_mutation.c $(BENCH)/test_mfs.c $(TIKUOS_ROOT)/kernel/fs/tiku_mfs.c $(TIKUOS_ROOT)/kernel/fs/tiku_mfs_mutation.h $(BUILD)/vfs.o $(BUILD)/vfs-hooks.o mk/tikuos-test.mk | $(BUILD)
+	$(CC) $(KERNEL_FLAGS) -MMD -MP $< $(BUILD)/vfs.o $(BUILD)/vfs-hooks.o -o $@
+.PHONY: media-discard-test
+media-discard-test: $(BUILD)/test-media-discard
+	$(BUILD)/test-media-discard
+media-test: media-discard-test
+-include $(BUILD)/test-media-discard.d
+
+$(BUILD)/test-media-discard-directories: tests/tikuos/test_media_discard.c tests/tikuos/test_media_mutation.c $(BENCH)/test_mfs.c $(TIKUOS_ROOT)/kernel/fs/tiku_mfs.c $(TIKUOS_ROOT)/kernel/fs/tiku_mfs_mutation.h $(BUILD)/vfs.o $(BUILD)/vfs-hooks.o mk/tikuos-test.mk | $(BUILD)
+	$(CC) $(KERNEL_FLAGS) -DTIKU_MEDIA_DIRECTORIES_ENABLE=1 -MMD -MP $< $(BUILD)/vfs.o $(BUILD)/vfs-hooks.o -o $@
+.PHONY: media-discard-directories-test
+media-discard-directories-test: $(BUILD)/test-media-discard-directories
+	$(BUILD)/test-media-discard-directories
+media-test: media-discard-directories-test
+-include $(BUILD)/test-media-discard-directories.d
+
 ifeq ($(SURFACE_EDITOR),1)
 $(BUILD)/test-editor: tests/tikuos/test_editor.c tests/tikuos/test_media.c platform/tikuos/media.c platform/tikuos/media_io.c $(MEDIA_CORE) $(HOST) $(PRODUCT) $(HEADERS) mk/tikuos-test.mk | $(BUILD)
 	$(CC) $(FLAGS) -DTIKU_MEDIA_DIRECTORIES_ENABLE=$(SURFACE_DIRECTORIES) -DTIKU_MEDIA_NAMES_ENABLE=1 -DTIKU_MEDIA_ASYNC_ENABLE=1 -Iplatform/tikuos -I$(TIKUOS_ROOT) $(filter-out tests/tikuos/test_media.c,$(filter %.c,$^)) $(SDK_LIBRARIES) -o $@

@@ -160,6 +160,11 @@ int main(void)
     card_fixture_put("notes/hello.txt", "TikuOS hello card\n", 18);
     card_fixture_put("audio/big.wav", big, sizeof big);
     card_fixture_put("samples/a.bin", big, 4116);
+    /* Hidden objects of large writes an earlier start left, and one that is
+     * not this layer's. */
+    card_fixture_put(".~7", "left", 4);
+    card_fixture_unfinished(".~9", big, 5000);
+    card_fixture_put(".~x", "other", 5);
     card_fixture_put("photos/.folder", "", 0);
     card_fixture_put("loose/only.txt", "x", 1);
     /* A Trash left by an earlier start, with its record of origins. */
@@ -263,13 +268,40 @@ int main(void)
     /* A writer without O_TRUNC starts from the card's bytes. */
     assert(put("/Card/k4-test/a.txt", O_APPEND, "!") == 0 && card_has("k4-test/a.txt", "bye!"));
 
-    /* At most 64 KiB is published; a larger file is refused, not cut. */
-    fd = _open("/Card/k4-test/full", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* A file past one replacement streams: written front to back, it takes
+     * the file's name at its close, and until then the card keeps the old
+     * version whole.  The first large write removes the hidden objects an
+     * earlier start left, and its own is gone after the close. */
+    assert(strstr(names("/Card"), ".~") == NULL);
+    assert(put("/Card/k4-test/full", O_TRUNC, "old") == 0);
+    fd = _open("/Card/k4-test/full", O_WRONLY | O_TRUNC, 0);
     assert(fd >= 0 && _write(fd, big, CARD_WRITE_PROBE) == (ssize_t)CARD_WRITE_PROBE);
-    assert(_write(fd, big, 1) == -1 && errno == EFBIG && _close(fd) == 0);
-    assert(card_fixture_get("k4-test/full", buf, sizeof buf) == (long)CARD_WRITE_PROBE &&
-           memcmp(buf, big, CARD_WRITE_PROBE) == 0);
+    assert(_write(fd, big + CARD_WRITE_PROBE, 1000) == 1000 && card_has("k4-test/full", "old"));
+    /* Between pieces the card takes other changes. */
+    assert(put("/Card/k4-test/side.txt", 0, "side") == 0 && card_has("k4-test/side.txt", "side"));
+    assert(_lseek(fd, 0, SEEK_SET) == 0 && _write(fd, "x", 1) == -1 && errno == ESPIPE);
+    {
+        int rd = _open("/Card/k4-test/full", O_RDONLY, 0);
+
+        assert(rd >= 0 && _read(rd, buf, 1) == -1 && errno == EBUSY && _close(rd) == 0);
+    }
+    assert(_lseek(fd, 0, SEEK_END) == (off_t)(CARD_WRITE_PROBE + 1000));
+    assert(_write(fd, big + CARD_WRITE_PROBE + 1000, sizeof big - CARD_WRITE_PROBE - 1000) ==
+           (ssize_t)(sizeof big - CARD_WRITE_PROBE - 1000));
+    assert(card_has("k4-test/full", "old") && card_fixture_exists(".~1"));
+    assert(!card_fixture_exists(".~7") && !card_fixture_exists(".~9") && card_fixture_exists(".~x"));
+    assert(_close(fd) == 0 && !card_fixture_exists(".~1"));
+    assert(card_fixture_get("k4-test/full", buf, sizeof buf) == (long)sizeof big && memcmp(buf, big, sizeof big) == 0);
+    assert(slurp("/Card/k4-test/full", buf, sizeof buf) == (ssize_t)sizeof big && memcmp(buf, big, sizeof big) == 0);
+    assert(strstr(names("/Card"), ".~") == NULL);
+    assert(_open("/Card/.~3", O_WRONLY | O_CREAT, 0644) == -1 && errno == EINVAL);
+    /* A writer that would start from such a file's card bytes is refused. */
     assert(_open("/Card/audio/big.wav", O_WRONLY, 0) == -1 && errno == EFBIG);
+    /* A large file removed while written leaves nothing on the card. */
+    fd = _open("/Card/k4-test/doomed", O_WRONLY | O_CREAT, 0644);
+    assert(fd >= 0 && _write(fd, big, sizeof big) == (ssize_t)sizeof big && card_fixture_exists(".~2"));
+    assert(_unlink("/Card/k4-test/doomed") == 0 && _write(fd, big, sizeof big) == (ssize_t)sizeof big);
+    assert(_close(fd) == 0 && !card_fixture_exists(".~2") && !card_fixture_exists("k4-test/doomed"));
 
     /* Stomme's guarded save: a temporary, fsync, close, rename over the
      * file; the file is replaced in one step and the temporary is gone. */
@@ -279,6 +311,22 @@ int main(void)
     assert(_close(fd) == 0 && _rename(tmp, "/Card/k4-test/a.txt") == 0);
     assert(card_has("k4-test/a.txt", "saved") && card_fixture_get(tmp + 6, buf, sizeof buf) == -1);
     assert(_stat(tmp, &st) == -1 && errno == ENOENT);
+    /* The guarded save of a large file: the temporary streams, fsync commits
+     * its pieces, and the rename puts it over the file in one transaction. */
+    snprintf(tmp, sizeof tmp, "/Card/k4-test/full.tmp-XXXXXX");
+    fd = mkstemp(tmp);
+    assert(fd >= 0 && _write(fd, big + 1, sizeof big - 1) == (ssize_t)(sizeof big - 1) && fsync(fd) == 0);
+    assert(card_fixture_get(".~3", buf, sizeof buf) == (long)sizeof big - 1 && memcmp(buf, big + 1, sizeof big - 1) == 0);
+    assert(card_fixture_get("k4-test/full", buf, sizeof buf) == (long)sizeof big && memcmp(buf, big, sizeof big) == 0);
+    {
+        unsigned overs = card_fixture_requests(SURFACE_MEDIA_RENAME_OVER), deletes = card_fixture_requests(SURFACE_MEDIA_DELETE);
+
+        assert(_close(fd) == 0 && card_fixture_requests(SURFACE_MEDIA_RENAME_OVER) == overs + 1u);
+        assert(_rename(tmp, "/Card/k4-test/full") == 0 && card_fixture_requests(SURFACE_MEDIA_RENAME_OVER) == overs + 2u &&
+               card_fixture_requests(SURFACE_MEDIA_DELETE) == deletes);
+    }
+    assert(card_fixture_get("k4-test/full", buf, sizeof buf) == (long)sizeof big - 1 &&
+           memcmp(buf, big + 1, sizeof big - 1) == 0 && !card_fixture_exists(tmp + 6));
 
     /* Renames: a file to a new folder; the folder it leaves keeps a
      * placeholder when it was the folder's last file. */
@@ -356,11 +404,21 @@ int main(void)
     assert(_stat("/Card/k4-test/lost", &st) == -1 && errno == ENOENT);
     assert(put("/Card/k4-test/empty", O_TRUNC, "changed") == -1 && errno == EIO);
     assert(_stat("/Card/k4-test/empty", &st) == 0 && st.st_size == 0);
+    fd = _open("/Card/k4-test/large-lost", O_WRONLY | O_CREAT, 0644);
+    assert(fd >= 0 && _write(fd, big, CARD_WRITE_PROBE) == (ssize_t)CARD_WRITE_PROBE);
+    assert(_write(fd, big, 10) == -1 && errno == EIO && _write(fd, big, 1) == -1 && errno == EIO);
+    assert(_close(fd) == -1 && errno == EIO);
+    assert(_stat("/Card/k4-test/large-lost", &st) == -1 && errno == ENOENT);
+    fd = _open("/Card/k4-test/full", O_WRONLY | O_TRUNC, 0);
+    assert(fd >= 0 && _write(fd, big, sizeof big) == -1 && errno == EIO && _close(fd) == -1 && errno == EIO);
+    assert(_stat("/Card/k4-test/full", &st) == 0 && st.st_size == (off_t)sizeof big - 1);
     card_fixture_fail_writes(0);
 
     /* After a remount the layer finds its files again by name. */
     card_fixture_remount();
     assert(card_has("k4-test/empty", "") && card_has("notes/hello.txt", "TikuOS hello card\n"));
+    assert(card_fixture_get("k4-test/full", buf, sizeof buf) == (long)sizeof big - 1 &&
+           memcmp(buf, big + 1, sizeof big - 1) == 0);
     fd = _open("/Card/k4-test/a.bin", O_RDONLY, 0);
     assert(fd >= 0 && _lseek(fd, 2000, SEEK_SET) == 2000 && _read(fd, buf, 16) == 16);
     assert(memcmp(buf, big + 2000, 16) == 0 && _close(fd) == 0);
@@ -377,6 +435,8 @@ int main(void)
         enumerates = card_fixture_requests(SURFACE_MEDIA_ENUMERATE);
         assert(put("/Card/k4-test/again.txt", 0, "first") == 0);
         assert(put("/Card/k4-test/target.txt", 0, "target") == 0 && put("/Card/k4-test/mover.txt", 0, "mover") == 0);
+        fd = _open("/Card/k4-test/streamed", O_WRONLY | O_CREAT, 0644);
+        assert(fd >= 0 && _write(fd, big, sizeof big) == (ssize_t)sizeof big && _close(fd) == 0);
         assert(card_read_is("/Card/k4-test/gone.txt", "kept head"));
         assert(card_fixture_requests(SURFACE_MEDIA_ENUMERATE) == enumerates);
 
@@ -398,6 +458,6 @@ int main(void)
 
     /* The files that were on the card are as they were. */
     assert(card_fixture_get("audio/big.wav", buf, sizeof buf) == (long)sizeof big && memcmp(buf, big, sizeof big) == 0);
-    puts("posix card: the home is the card's home folder with Desktop, Documents and a Trash; the card mounts read-write with its own size; folders keep a hidden placeholder; files publish whole at close or fsync, at most 64 KiB; the guarded save replaces in one step; files and folders rename on the card, folders object by object; the card and the tree are separate; removals keep the folder; refused names, a failing card, a remount and another client's changes");
+    puts("posix card: the home is the card's home folder with Desktop, Documents and a Trash; the card mounts read-write with its own size; folders keep a hidden placeholder; files up to 64 KiB publish whole at close or fsync, larger ones stream and take the name at close; the guarded save replaces in one step; files and folders rename on the card, folders object by object; the card and the tree are separate; removals keep the folder; refused names, a failing card, a remount and another client's changes");
     return 0;
 }

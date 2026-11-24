@@ -23,7 +23,7 @@ static tiku_block_t block;
 static const uint8_t uuid[16] = {7};
 static _Alignas(8) unsigned char bridge[SURFACE_MEDIA_BRIDGE_BYTES];
 static int writes_fail;
-static unsigned requests[16];
+static unsigned requests[32];
 static unsigned foreign_base;       /* the counts of bridges before a remount */
 
 static int read_disk(void *ctx, uint64_t lba, uint32_t n, void *out)
@@ -227,6 +227,22 @@ void card_fixture_remount(void) { mount(); }
 void card_fixture_fail_writes(int on) { writes_fail = on; }
 unsigned card_fixture_requests(unsigned operation)
 { return operation < sizeof requests / sizeof requests[0] ? requests[operation] : 0u; }
+
+void card_fixture_unfinished(const char *name, const void *bytes, size_t len)
+{
+    uint64_t id;
+
+    assert(len > 0 && len <= TIKU_MFS_CHUNK);
+    assert(!tiku_mfs_begin(&fs, name, TIKU_MFS_STREAM, 0, NULL, &id));
+    assert(!tiku_mfs_append(&fs, bytes, (uint32_t)len) && !tiku_mfs_sync(&fs) && !tiku_mfs_release(&fs));
+}
+
+int card_fixture_exists(const char *name)
+{
+    tiku_mfs_object_t o;
+
+    return tiku_mfs_stat(&fs, name, &o) == 0;
+}
 
 void card_fixture_delete(const char *name)
 {

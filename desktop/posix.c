@@ -394,10 +394,11 @@ static rnode_t *child_named(rnode_t *dir, const char *name, size_t len)
 /* The card's native media volume names its objects with '/' inside the
  * name.  /Card shows each prefix as a directory, listed the first time a
  * path walks into it, and each object as a file whose bytes come through the
- * kernel's media bridge; the prefix "home" is /home, not shown in /Card.  A file opened to write holds its bytes in its node
- * and publishes them whole at fsync() or close(), one atomic replacement of
- * at most CARD_WRITE_MAX bytes.  A folder made here keeps a hidden empty
- * object, CARD_FOLDER, so it is still there, empty, after a restart. */
+ * kernel's media bridge; the prefix "home" is /home, not shown in /Card.  A
+ * file opened to write holds its bytes in its node and publishes them whole
+ * at fsync() or close(), one atomic replacement of at most CARD_WRITE_MAX
+ * bytes; a larger one streams (LARGE FILES below).  A folder made here keeps
+ * a hidden empty object, CARD_FOLDER, so it is still there after a restart. */
 #define CARD_NAME 64u                 /* bytes of a media name, NUL included */
 #define CARD_READ 1024u               /* bytes one read request returns */
 #define CARD_ENTRIES 4096u            /* enumeration steps one listing takes */
@@ -411,6 +412,8 @@ static rnode_t *child_named(rnode_t *dir, const char *name, size_t len)
 #define CARD_ORIGINS ".origins"       /* a card Trash's record of where its items came from */
 #define CARD_ORIGINS_LEN 8u
 #define ORIGIN_ATTR "user._trk/original_path"   /* Stomme's attribute for that */
+#define CARD_STREAM ".~"              /* a large write's hidden object, at the card's root */
+#define CARD_STREAM_LEN 2u
 
 typedef struct card_node {
     char name[CARD_NAME];   /* a file's full name; a directory's prefix */
@@ -427,6 +430,12 @@ typedef struct card_node {
     unsigned writers;       /* descriptors open on it to write */
     unsigned version;       /* counts the writes into the staged bytes */
     unsigned checked;       /* card_generation when last found on the card */
+    int streaming;          /* written past CARD_WRITE_MAX: data holds the bytes from streamed */
+    int broken;             /* a piece of the stream failed: writes refused until the last close */
+    int flushing;           /* a piece is on its way to the card: other writers wait */
+    size_t streamed;        /* bytes of the file appended to its hidden object */
+    uint64_t stream;        /* that object, 0 until its first piece */
+    char stream_name[16];   /* its name */
 } card_node_t;
 
 /* Changes made to the card by another client, as the bridge counts them:
@@ -556,6 +565,8 @@ static void card_load(rnode_t *dir)
 
             if (f == CARD_FOLDER_LEN && memcmp(rest, CARD_FOLDER, f) == 0) {
                 dir->card->folder = io.id;     /* the placeholder is not listed */
+            } else if (n == 0 && f > CARD_STREAM_LEN && memcmp(rest, CARD_STREAM, CARD_STREAM_LEN) == 0) {
+                /* nor is a large write's hidden object */
             } else if (card_is_trash(dir) && f == CARD_ORIGINS_LEN && memcmp(rest, CARD_ORIGINS, f) == 0) {
                 dir->card->origins = io.id;    /* nor is a Trash's record */
             } else if (f > 0 && f < NAME_MAX_BYTES && child_named(dir, rest, f) == NULL) {
@@ -770,6 +781,10 @@ static int card_child_name(const rnode_t *dir, const char *leaf, size_t len, siz
         errno = EEXIST;             /* the home's folder, shown as /home */
         return -1;
     }
+    if (n == 0 && len > CARD_STREAM_LEN && memcmp(leaf, CARD_STREAM, CARD_STREAM_LEN) == 0) {
+        errno = EINVAL;             /* the names of large writes' hidden objects */
+        return -1;
+    }
     if (n + sep + len + room >= CARD_NAME) {
         errno = ENAMETOOLONG;
         return -1;
@@ -841,6 +856,170 @@ static int card_move(uint64_t id, const char *name, const char *to)
         errno = card_errno(io.result);
         return -1;
     }
+    return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+/* LARGE FILES                                                               */
+/*---------------------------------------------------------------------------*/
+/* A file written past CARD_WRITE_MAX streams into a hidden object at the
+ * card's root, CARD_STREAM and a number, in pieces of CARD_WRITE_MAX bytes.
+ * Each piece takes the card's writer, appends, commits and gives the writer
+ * back, so other changes run between pieces.  At the close the object is
+ * completed and renamed over the file in one transaction, and the old
+ * version is whole until then.  Hidden objects an earlier start left are
+ * removed before the first large write. */
+static unsigned card_streams;     /* hidden objects named since the start */
+static int card_swept;            /* an earlier start's hidden objects are gone */
+
+/** @brief Run stream operation @p op on file @p n's hidden object, with
+ *  @p len bytes at @p bytes for an append.  0, or -1 with errno set. */
+static int card_stream_op(rnode_t *n, unsigned op, const unsigned char *bytes, size_t len)
+{
+    surface_media_io_t io;
+
+    memset(&io, 0, sizeof io);
+    io.operation = op;
+    memcpy(io.name, n->card->stream_name, sizeof n->card->stream_name);
+    io.id = n->card->stream;
+    io.bytes = (unsigned char *)bytes;
+    io.length = len;
+    card_request(&io);
+    card_space_known = 0;
+    if (io.result != SURFACE_MEDIA_OK) {
+        errno = card_errno(io.result);
+        return -1;
+    }
+    if (op == SURFACE_MEDIA_BEGIN) n->card->stream = io.id;
+    return 0;
+}
+
+/** @brief Remove card object @p id named @p name, unfinished or complete. */
+static void card_stream_remove(uint64_t id, const char *name)
+{
+    surface_media_io_t io;
+
+    memset(&io, 0, sizeof io);
+    io.operation = SURFACE_MEDIA_DISCARD;
+    snprintf(io.name, sizeof io.name, "%s", name);
+    io.id = id;
+    card_request(&io);
+    if (io.result == SURFACE_MEDIA_STALE) (void)card_move(id, name, NULL);
+}
+
+/** @brief Remove the hidden objects an earlier start left on the card. */
+static void card_stream_sweep(void)
+{
+    char from[CARD_NAME];
+    unsigned exclusive = 0;
+
+    memcpy(from, CARD_STREAM, CARD_STREAM_LEN + 1u);
+    for (;;) {
+        surface_media_io_t io;
+
+        memset(&io, 0, sizeof io);
+        io.operation = SURFACE_MEDIA_ENUMERATE;
+        memcpy(io.name, from, CARD_NAME);
+        io.exclusive = exclusive;
+        card_request(&io);
+        if (io.result != SURFACE_MEDIA_OK || strncmp(io.found, CARD_STREAM, CARD_STREAM_LEN) != 0) break;
+        if (strspn(io.found + CARD_STREAM_LEN, "0123456789") == strlen(io.found + CARD_STREAM_LEN))
+            card_stream_remove(io.id, io.found);
+        memcpy(from, io.found, CARD_NAME);
+        exclusive = 1;
+    }
+}
+
+/** @brief Append the bytes file @p n holds past those its hidden object has
+ *  and commit them, or complete the object when @p final; the card's writer
+ *  is held for this alone.  0, or -1 with errno set. */
+static int card_stream_flush(rnode_t *n, int final)
+{
+    card_node_t *c = n->card;
+    size_t len = n->size - c->streamed;
+    unsigned char *copy = NULL;
+    int r, held;
+
+    if (len != 0u) {
+        copy = malloc(len);
+        if (copy == NULL) {
+            errno = ENOMEM;
+            return -1;
+        }
+        memcpy(copy, n->data, len);
+    }
+    if (c->stream == 0) {
+        if (!card_swept) {
+            card_stream_sweep();
+            card_swept = 1;
+        }
+        snprintf(c->stream_name, sizeof c->stream_name, CARD_STREAM "%u", ++card_streams);
+        r = card_stream_op(n, SURFACE_MEDIA_BEGIN, NULL, 0);
+    } else {
+        r = card_stream_op(n, SURFACE_MEDIA_RESUME, NULL, 0);
+    }
+    held = r == 0;
+    c->flushing = 1;
+    if (r == 0 && len != 0u) r = card_stream_op(n, SURFACE_MEDIA_APPEND, copy, len);
+    if (r == 0) r = card_stream_op(n, final ? SURFACE_MEDIA_FINALIZE : SURFACE_MEDIA_SYNC, NULL, 0);
+    if (r == 0 && final) held = 0;  /* completion gives the writer back */
+    if (held) {
+        int e = errno, k = card_stream_op(n, SURFACE_MEDIA_RELEASE, NULL, 0);
+
+        if (r == 0) r = k;
+        else errno = e;
+    }
+    free(copy);
+    c->flushing = 0;
+    if (r == 0) c->streamed += len;
+    return r;
+}
+
+/** @brief End file @p n's stream: its hidden object goes, and the file
+ *  reads the card's version again. */
+static void card_stream_drop(rnode_t *n)
+{
+    card_node_t *c = n->card;
+    int e = errno;
+
+    if (c->stream != 0) card_stream_remove(c->stream, c->stream_name);
+    c->stream = 0;
+    c->streaming = 0;
+    c->streamed = 0;
+    c->dirty = 0;
+    errno = e;
+}
+
+/** @brief Complete file @p n's hidden object and rename it over the file in
+ *  one transaction.  0, or -1 with errno set and the card's version kept. */
+static int card_stream_publish(rnode_t *n)
+{
+    card_node_t *c = n->card;
+    surface_media_io_t io;
+
+    if (card_stream_flush(n, 1) != 0) return -1;
+    memset(&io, 0, sizeof io);
+    io.operation = SURFACE_MEDIA_RENAME_OVER;
+    memcpy(io.name, c->stream_name, sizeof c->stream_name);
+    snprintf(io.destination, sizeof io.destination, "%s", c->name);
+    io.id = c->stream;
+    io.offset = c->id;
+    card_request(&io);
+    card_space_known = 0;
+    if (io.result != SURFACE_MEDIA_OK) {
+        errno = card_errno(io.result);
+        return -1;
+    }
+    c->id = c->stream;
+    c->stream = 0;
+    c->streaming = 0;
+    c->streamed = 0;
+    c->stored = n->size;
+    c->epoch = 0;                   /* found again by name at the next open */
+    c->dirty = 0;
+    free(c->head);
+    c->head = NULL;
+    c->head_len = 0;
     return 0;
 }
 
@@ -1921,8 +2100,15 @@ static int _close_locked(int fd)
         /* The descriptor is busy while its bytes are published. */
         f->busy = 1;
         card_change_begin();
-        if (!n->unlinked && card_publish(n) != 0) {
+        if (n->card->broken) {
+            e = EIO;                /* a piece of its stream failed */
+        } else if (n->card->streaming) {
+            if (!n->unlinked && card_stream_publish(n) != 0) e = errno;
+            if (n->card->streaming) card_stream_drop(n);
+        } else if (!n->unlinked && card_publish(n) != 0) {
             e = errno;
+        }
+        if (e != 0 && !n->unlinked) {
             /* What was written is not on the card: a file never published
              * goes, and one that was reads the card's version again. */
             n->card->dirty = 0;
@@ -1933,6 +2119,7 @@ static int _close_locked(int fd)
                 (void)card_keep_folder(dir);
             }
         }
+        if (n->card->writers == 1u) n->card->broken = 0;
         n->card->writers--;
         card_unstage(n);
         if (e != 0 && !n->unlinked && !n->card->staged) n->size = n->card->stored;
@@ -2053,6 +2240,10 @@ static _ssize_t read_at(int fd, void *buf, size_t n, const off_t *at)
         return -1;
     }
     pos = at != NULL ? *at : f->pos;
+    if (f->node->card != NULL && f->node->card->streaming) {
+        errno = EBUSY;              /* its node holds only the bytes not yet streamed */
+        return -1;
+    }
     if (f->node->card != NULL && S_ISREG(f->node->mode) && !f->node->card->staged)
         return card_file_read(f, f->gen, buf, n, pos, at == NULL);
     if ((size_t)pos >= f->node->size) return 0;
@@ -2079,6 +2270,68 @@ void surface_desktop_write_stats(uint32_t *console, uint32_t *files, uint32_t *c
     *last = last_written != NULL ? last_written->name : "";
 }
 
+/** @brief Write @p n bytes at @p buf to the end, @p at, of streaming card
+ *  file @p f->node, each full piece appended to its hidden object.  The
+ *  bytes written, or -1 with errno set; a failed piece ends the stream. */
+static _ssize_t card_stream_write(fd_t *f, size_t at, const unsigned char *buf, size_t n)
+{
+    rnode_t *node = f->node;
+    card_node_t *c = node->card;
+    size_t done = 0;
+    int r = 0;
+
+    while (c->flushing) await_change();
+    if (at != node->size) {
+        errno = ESPIPE;
+        return -1;
+    }
+    /* The descriptor is busy while a piece is appended. */
+    f->busy = 1;
+    while (done < n && r == 0) {
+        size_t held = node->size - c->streamed, k = n - done;
+
+        if (held == CARD_WRITE_MAX) {
+            /* A full piece goes to the card; a removed file's is dropped. */
+            if (node->unlinked) {
+                c->streamed = node->size;
+                continue;
+            }
+            card_change_begin();
+            r = card_stream_flush(node, 0);
+            if (r != 0) {
+                card_stream_drop(node);
+                c->broken = 1;
+                node->size = c->stored;
+            }
+            card_change_end();
+            continue;
+        }
+        if (k > CARD_WRITE_MAX - held) k = CARD_WRITE_MAX - held;
+        if (reserve(node, held + k) != 0) {
+            r = -1;
+            break;
+        }
+        memcpy(node->data + held, buf + done, k);
+        node->size += k;
+        done += k;
+    }
+    f->busy = 0;
+    announce_change();
+    if (r != 0) return -1;
+    if (!f->wrote) {
+        changed(node);
+        f->wrote = 1;
+    } else {
+        f->wrote = 2;
+    }
+    file_bytes += (uint32_t)n;
+    file_writes++;
+    last_written = node;
+    f->pos = (off_t)node->size;
+    node->mtime = wall();
+    return (_ssize_t)n;
+}
+
 static _ssize_t _write_locked(int fd, const void *buf, size_t n)
 {
     fd_t *f;
@@ -2102,12 +2355,24 @@ static _ssize_t _write_locked(int fd, const void *buf, size_t n)
         return -1;
     }
     if (f->node->card != NULL) {
-        if (at + n > CARD_WRITE_MAX) {
-            errno = EFBIG;
+        card_node_t *c = f->node->card;
+
+        if (c->broken) {
+            errno = EIO;
             return -1;
         }
-        f->node->card->dirty = 1;
-        f->node->card->version++;
+        /* A file grows past what one replacement publishes only at its end,
+         * and from then on is written front to back. */
+        if (!c->streaming && at + n > CARD_WRITE_MAX) {
+            if (at != f->node->size) {
+                errno = EFBIG;
+                return -1;
+            }
+            c->streaming = 1;
+        }
+        if (c->streaming) return card_stream_write(f, at, buf, n);
+        c->dirty = 1;
+        c->version++;
     }
     if (reserve(f->node, at + n) != 0) return -1;
     memcpy(f->node->data + at, buf, n);
@@ -2368,6 +2633,7 @@ static int card_rename_file(rnode_t *from, rnode_t *to, rnode_t *parent, const c
                             size_t len, const char *name)
 {
     rnode_t *old_dir = from->parent;
+    int moved = 0;
 
     if (to != NULL) {
         uint64_t id;
@@ -2380,9 +2646,28 @@ static int card_rename_file(rnode_t *from, rnode_t *to, rnode_t *parent, const c
             errno = EBUSY;
             return -1;
         }
-        if (from->size > CARD_WRITE_MAX) {
-            /* Too large to publish whole: the target goes first, then the
-             * file takes its name; a cut between leaves neither name. */
+        if (from->size > CARD_WRITE_MAX && from->card->id != 0) {
+            /* Too large to publish whole: the file takes the target's name in
+             * one transaction that also removes the target's version. */
+            surface_media_io_t io;
+
+            memset(&io, 0, sizeof io);
+            io.operation = SURFACE_MEDIA_RENAME_OVER;
+            snprintf(io.name, sizeof io.name, "%s", from->card->name);
+            snprintf(io.destination, sizeof io.destination, "%s", name);
+            io.id = from->card->id;
+            io.offset = to->card->id;
+            card_request(&io);
+            card_space_known = 0;
+            if (io.result != SURFACE_MEDIA_OK) {
+                errno = card_errno(io.result);
+                return -1;
+            }
+            card_remove_node(to);
+            to = NULL;
+            moved = 1;
+        } else if (from->size > CARD_WRITE_MAX) {
+            /* A large file not yet on the card takes the name at its close. */
             if (to->card->id != 0 && card_move(to->card->id, to->card->name, NULL) != 0) return -1;
             card_remove_node(to);
             to = NULL;
@@ -2408,7 +2693,7 @@ static int card_rename_file(rnode_t *from, rnode_t *to, rnode_t *parent, const c
             return 0;
         }
     }
-    if (from->card->id != 0 && card_move(from->card->id, from->card->name, name) != 0 &&
+    if (!moved && from->card->id != 0 && card_move(from->card->id, from->card->name, name) != 0 &&
         (errno != ESTALE || card_locate(from) != 0 ||
          card_move(from->card->id, from->card->name, name) != 0))
         return -1;
@@ -3033,7 +3318,23 @@ static int fsync_locked(int fd)
         if (fd_idle(f, f->gen) != 0) return -1;
         f->busy = 1;
         card_change_begin();
-        r = f->node->unlinked ? 0 : card_publish(f->node);
+        if (f->node->card->broken) {
+            errno = EIO;
+            r = -1;
+        } else if (f->node->unlinked) {
+            r = 0;
+        } else if (f->node->card->streaming) {
+            /* A streaming file's bytes are committed to its hidden object;
+             * the file takes them at its close. */
+            r = card_stream_flush(f->node, 0);
+            if (r != 0) {
+                card_stream_drop(f->node);
+                f->node->card->broken = 1;
+                f->node->size = f->node->card->stored;
+            }
+        } else {
+            r = card_publish(f->node);
+        }
         card_change_end();
         f->busy = 0;
         return r;
@@ -3065,7 +3366,7 @@ static int ftruncate_locked(int fd, off_t length)
             errno = EBADF;
             return -1;
         }
-        if ((size_t)length > CARD_WRITE_MAX) {
+        if ((size_t)length > CARD_WRITE_MAX || f->node->card->streaming) {
             errno = EFBIG;
             return -1;
         }

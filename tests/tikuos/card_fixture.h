@@ -29,6 +29,10 @@ void card_fixture_remount(void);
 void card_fixture_fail_writes(int on);
 /** @brief Bridge requests run so far, by operation. */
 unsigned card_fixture_requests(unsigned operation);
+/** @brief Leave stream @p name unfinished with @p len bytes, as a cut does. */
+void card_fixture_unfinished(const char *name, const void *bytes, size_t len);
+/** @brief Whether object @p name is on the card, finished or not. */
+int card_fixture_exists(const char *name);
 /** @brief Remove object @p name directly on the card, as another client. */
 void card_fixture_delete(const char *name);
 /** @brief The bridge's count of changes it did not make, after an idle

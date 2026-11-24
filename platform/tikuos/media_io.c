@@ -78,6 +78,36 @@ static int space(media_bridge_t *b, surface_media_io_t *v)
     return SURFACE_MEDIA_OK;
 }
 
+/** @brief The firmware operation behind bridge operation @p op, or -1 when
+ *  this build does not serve it. */
+static int media_op(unsigned op)
+{
+    static const tiku_media_op_t base[] = {TIKU_MEDIA_ENUMERATE, TIKU_MEDIA_OPEN_VERSION,
+        TIKU_MEDIA_READ_AT, TIKU_MEDIA_CLOSE, TIKU_MEDIA_RENAME, TIKU_MEDIA_DELETE_VERSION, TIKU_MEDIA_REPLACE
+#if SURFACE_DIRECTORIES
+        ,TIKU_MEDIA_MKDIR,TIKU_MEDIA_TREE_RENAME,TIKU_MEDIA_TREE_DELETE,TIKU_MEDIA_DIRECTORY_UPGRADE,TIKU_MEDIA_TREE_COPY
+#endif
+        };
+    static const tiku_media_op_t stream[] = {TIKU_MEDIA_BEGIN, TIKU_MEDIA_RESUME, TIKU_MEDIA_APPEND,
+        TIKU_MEDIA_SYNC, TIKU_MEDIA_FINALIZE, TIKU_MEDIA_RELEASE, TIKU_MEDIA_DISCARD, TIKU_MEDIA_RENAME_OVER};
+    if (op < sizeof base / sizeof base[0]) return (int)base[op];
+    if (op >= SURFACE_MEDIA_BEGIN && op <= SURFACE_MEDIA_RENAME_OVER) return (int)stream[op - SURFACE_MEDIA_BEGIN];
+    return -1;
+}
+
+/** @brief Whether firmware operation @p op runs on the mutation owner. */
+static int mutating(int op)
+{
+    return op == TIKU_MEDIA_RENAME || op == TIKU_MEDIA_DELETE_VERSION || op == TIKU_MEDIA_REPLACE ||
+        (op >= TIKU_MEDIA_BEGIN && op <= TIKU_MEDIA_RELEASE) ||
+        op == TIKU_MEDIA_DISCARD || op == TIKU_MEDIA_RENAME_OVER
+#if SURFACE_DIRECTORIES
+        || op == TIKU_MEDIA_MKDIR || op == TIKU_MEDIA_TREE_RENAME || op == TIKU_MEDIA_TREE_DELETE ||
+        op == TIKU_MEDIA_DIRECTORY_UPGRADE || op == TIKU_MEDIA_TREE_COPY
+#endif
+        ;
+}
+
 int surface_os_media_submit(void *data, surface_media_io_t *v)
 {
     media_bridge_t *b = data;
@@ -87,8 +117,10 @@ int surface_os_media_submit(void *data, surface_media_io_t *v)
         if (b->view) return SURFACE_MEDIA_BUSY;
         return space(b, v);
     }
-    if (!b || !v || !surface_os_in_owner() || v->operation > (SURFACE_DIRECTORIES?SURFACE_MEDIA_TREE_COPY:SURFACE_MEDIA_REPLACE) ||
-        v->length > ((v->operation==SURFACE_MEDIA_REPLACE||v->operation==SURFACE_MEDIA_TREE_COPY)?65536u:1024u))
+    int op = v ? media_op(v->operation) : -1;
+    if (!b || !v || !surface_os_in_owner() || op < 0 ||
+        v->length > ((v->operation==SURFACE_MEDIA_REPLACE||v->operation==SURFACE_MEDIA_TREE_COPY||
+                      v->operation==SURFACE_MEDIA_APPEND)?65536u:1024u))
         return SURFACE_MEDIA_INVALID;
     if (!b->ready) return SURFACE_MEDIA_UNAVAILABLE;
     if (b->view) return SURFACE_MEDIA_BUSY;
@@ -96,17 +128,13 @@ int surface_os_media_submit(void *data, surface_media_io_t *v)
         v->operation >= SURFACE_MEDIA_RENAME)
         b->store = tiku_media_card_store();
     if (!b->store) return SURFACE_MEDIA_UNAVAILABLE;
-    static const tiku_media_op_t operations[] = {TIKU_MEDIA_ENUMERATE, TIKU_MEDIA_OPEN_VERSION,
-        TIKU_MEDIA_READ_AT, TIKU_MEDIA_CLOSE, TIKU_MEDIA_RENAME, TIKU_MEDIA_DELETE_VERSION, TIKU_MEDIA_REPLACE
-#if SURFACE_DIRECTORIES
-        ,TIKU_MEDIA_MKDIR,TIKU_MEDIA_TREE_RENAME,TIKU_MEDIA_TREE_DELETE,TIKU_MEDIA_DIRECTORY_UPGRADE,TIKU_MEDIA_TREE_COPY
-#endif
-        };
-    b->request = (tiku_media_request_t){.op = operations[v->operation], .client = 0x53555246u,
+    b->request = (tiku_media_request_t){.op = (tiku_media_op_t)op, .client = 0x53555246u,
         .permissions = v->operation==SURFACE_MEDIA_DIRECTORY_UPGRADE?TIKU_MEDIA_ADMIN:v->operation >= SURFACE_MEDIA_RENAME ? TIKU_MEDIA_WRITE : TIKU_MEDIA_READ, .name = v->name, .names_epoch = v->epoch,
         .rank = v->rank, .exclusive = (uint8_t)v->exclusive, .info = &b->info,
         .id = v->operation >= SURFACE_MEDIA_RENAME ? v->id : v->reader, .offset = v->offset,
-        .buffer = (v->operation == SURFACE_MEDIA_RENAME || v->operation == SURFACE_MEDIA_TREE_RENAME) ? (void *)v->destination : v->bytes, .length = (uint32_t)v->length};
+        .buffer = (v->operation == SURFACE_MEDIA_RENAME || v->operation == SURFACE_MEDIA_TREE_RENAME ||
+                   v->operation == SURFACE_MEDIA_RENAME_OVER) ? (void *)v->destination : v->bytes,
+        .length = (uint32_t)v->length, .policy = TIKU_MFS_STREAM};
 #if SURFACE_DIRECTORIES
     if(v->operation==SURFACE_MEDIA_TREE_COPY){b->request.destination=v->destination;
         b->request.permissions=TIKU_MEDIA_READ|TIKU_MEDIA_WRITE;}
@@ -124,12 +152,8 @@ static void progress(media_bridge_t *b)
 {
     if (!tiku_media_card_read_idle(b->read_state))
         (void)tiku_media_card_read_step(b->read_state, b->store);
-    else if (!tiku_media_card_mutation_idle(b->mutation_state) || (b->store->count &&
-        (b->store->queue[0]->op == TIKU_MEDIA_RENAME || b->store->queue[0]->op == TIKU_MEDIA_DELETE_VERSION || b->store->queue[0]->op == TIKU_MEDIA_REPLACE
-#if SURFACE_DIRECTORIES
-         ||b->store->queue[0]->op == TIKU_MEDIA_MKDIR || b->store->queue[0]->op == TIKU_MEDIA_TREE_RENAME || b->store->queue[0]->op == TIKU_MEDIA_TREE_DELETE || b->store->queue[0]->op == TIKU_MEDIA_DIRECTORY_UPGRADE || b->store->queue[0]->op == TIKU_MEDIA_TREE_COPY
-#endif
-         )))
+    else if (!tiku_media_card_mutation_idle(b->mutation_state) ||
+             (b->store->count && mutating((int)b->store->queue[0]->op)))
         (void)tiku_media_card_mutation_step(b->mutation_state, b->store);
     else (void)tiku_media_card_read_step(b->read_state, b->store);
 }
@@ -172,8 +196,11 @@ int surface_os_media_poll(void *data)
 #endif
     }
     if (v->operation >= SURFACE_MEDIA_RENAME && !r) {v->epoch = b->store->fs->names_epoch;v->id=b->request.id;}
-    /* A rename, delete or replace changes the names once. */
-    account(b, v->operation >= SURFACE_MEDIA_RENAME && v->operation <= SURFACE_MEDIA_REPLACE && !r);
+    /* Each of these changes the names once; a resume, append, sync or
+     * release none. */
+    account(b, !r && ((v->operation >= SURFACE_MEDIA_RENAME && v->operation <= SURFACE_MEDIA_REPLACE) ||
+                      v->operation == SURFACE_MEDIA_BEGIN || v->operation == SURFACE_MEDIA_FINALIZE ||
+                      v->operation == SURFACE_MEDIA_DISCARD || v->operation == SURFACE_MEDIA_RENAME_OVER));
     b->view = NULL;
     return 1;
 }
