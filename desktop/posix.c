@@ -400,7 +400,8 @@ static rnode_t *child_named(rnode_t *dir, const char *name, size_t len)
  * bytes; a larger one streams (LARGE FILES below).  A folder made here keeps
  * a hidden empty object, CARD_FOLDER, so it is still there after a restart. */
 #define CARD_NAME 64u                 /* bytes of a media name, NUL included */
-#define CARD_READ 1024u               /* bytes one read request returns */
+#define CARD_READ 65536u              /* bytes one read request returns at most */
+#define CARD_HEAD 1024u               /* first bytes a file keeps once read */
 #define CARD_ENTRIES 4096u            /* enumeration steps one listing takes */
 #define CARD_UNLISTED 0               /* a directory's entries are not read */
 #define CARD_LISTING 1                /* a thread is reading them */
@@ -1261,7 +1262,8 @@ static void fill_stat(const rnode_t *n, struct stat *st)
     st->st_mode = n->mode;
     st->st_nlink = S_ISDIR(n->mode) ? 2 : 1;
     st->st_size = (off_t)n->size;
-    st->st_blksize = 512;
+    /* newlib sizes a stream's buffer by it: one card read request apiece. */
+    st->st_blksize = n->card != NULL && S_ISREG(n->mode) ? CARD_READ : 512;
     st->st_blocks = (blkcnt_t)((n->size + 511u) / 512u);
     st->st_mtim.tv_sec = n->mtime;
     st->st_atim.tv_sec = n->mtime;
@@ -2158,7 +2160,7 @@ static _ssize_t card_file_read(fd_t *f, unsigned gen, unsigned char *buf, size_t
     if (c->head == NULL && pos == 0) {
         /* The first bytes are kept: type checks and value columns read
          * them again and again, and each card request is slow. */
-        size_t want = node->size < CARD_READ ? node->size : CARD_READ;
+        size_t want = node->size < CARD_HEAD ? node->size : CARD_HEAD;
         unsigned char *head;
 
         if (f->reader == 0 && (f->reader = card_open(node)) == 0) {

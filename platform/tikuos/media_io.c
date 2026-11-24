@@ -120,7 +120,7 @@ int surface_os_media_submit(void *data, surface_media_io_t *v)
     int op = v ? media_op(v->operation) : -1;
     if (!b || !v || !surface_os_in_owner() || op < 0 ||
         v->length > ((v->operation==SURFACE_MEDIA_REPLACE||v->operation==SURFACE_MEDIA_TREE_COPY||
-                      v->operation==SURFACE_MEDIA_APPEND)?65536u:1024u))
+                      v->operation==SURFACE_MEDIA_APPEND||v->operation==SURFACE_MEDIA_READ)?65536u:1024u))
         return SURFACE_MEDIA_INVALID;
     if (!b->ready) return SURFACE_MEDIA_UNAVAILABLE;
     if (b->view) return SURFACE_MEDIA_BUSY;

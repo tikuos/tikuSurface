@@ -268,6 +268,16 @@ int main(void)
     /* A writer without O_TRUNC starts from the card's bytes. */
     assert(put("/Card/k4-test/a.txt", O_APPEND, "!") == 0 && card_has("k4-test/a.txt", "bye!"));
 
+    /* A card file is read in requests of up to 64 KiB, and tells stdio so. */
+    {
+        unsigned reads = card_fixture_requests(SURFACE_MEDIA_READ);
+
+        assert(_stat("/Card/audio/big.wav", &st) == 0 && st.st_blksize == 65536);
+        assert(slurp("/Card/audio/big.wav", buf, sizeof buf) == (ssize_t)sizeof big && memcmp(buf, big, sizeof big) == 0);
+        assert(card_fixture_requests(SURFACE_MEDIA_READ) - reads <= 3u);
+        assert(_stat("/home/.config", &st) == 0 && st.st_blksize == 512);
+    }
+
     /* A file past one replacement streams: written front to back, it takes
      * the file's name at its close, and until then the card keeps the old
      * version whole.  The first large write removes the hidden objects an
