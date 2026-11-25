@@ -18,9 +18,9 @@ describes.
 
 | Facility | Kernel provider | Binding | Context | Lifetime |
 | --- | --- | --- | --- | --- |
-| Panel scan-out | `tiku_display_init`, `_submit`, `_poll`, `tiku_s31_psram_sync` | `platform/tikuos/display.c` | Owner turn | Frame |
+| Panel scan-out | `tiku_display_init`, `_set_buffers`, `_submit`, `_poll`, `tiku_s31_psram_sync`; the driver returns its own scan-out buffer when handed the frames | `platform/tikuos/display.c` | Owner turn | Frame |
 | Touch reports | `tiku_touch_poll` on the I2C bus, inside a time budget | `platform/tikuos/input.c` | Owner turn | Report |
-| Desktop memory | One PSRAM tier arena, `tiku_tier_arena_create_span` | `platform/tikuos/bindings.c` | Start | Until restart |
+| Desktop memory | Two PSRAM tier arenas, `tiku_tier_arena_create_span`: the frames before the panel opens, the stacks, stages and heap after | `surface_os_reserve_frames()`, `surface_os_reserve()` in `platform/tikuos/bindings.c` | Start | Until restart |
 | The desktop thread | `tiku_thread_start`, `_wait`, `_wake_all`, `_exit` | `platform/tikuos/desktop_bindings.c` | Desktop thread | Until restart |
 | The owner turn | One process, `surface_process`, woken by a timer and by polls | `platform/tikuos/bindings.c` | Kernel | Until restart |
 | Monotonic time | `tiku_clock_usec` | `surface_os_time()` | Both | Since boot |

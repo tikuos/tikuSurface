@@ -56,12 +56,15 @@ int surface_runtime_touch_log(char *buffer, size_t capacity);
 #ifndef SURFACE_NATIVE_DESKTOP
 #define SURFACE_NATIVE_DESKTOP 0
 #endif
-/* The native desktop: two RGB565 scanout buffers, the desktop thread's
- * stack, its job thread's stack and the C-library heap the shell allocates
- * from.  With the display's 768,000-byte scanout this leaves 182,272 bytes
- * of the PSRAM tier free. */
+/* The native desktop: its two RGB565 frame buffers, reserved first, then
+ * the desktop thread's stack, its job thread's stack, the settings stages
+ * and the C-library heap the shell allocates from.  The rest is reserved
+ * after the panel opens, so it takes the 768,000 bytes the display driver
+ * holds until it is handed the frames; with the card's bitmap this leaves
+ * 121,264 bytes of the PSRAM tier free. */
 #if SURFACE_NATIVE_DESKTOP
-#define SURFACE_RUNTIME_BYTES (13056u * 1024u)
+#define SURFACE_FRAMES_BYTES 1536000u
+#define SURFACE_RUNTIME_BYTES (12306u * 1024u)
 #else
 #define SURFACE_RUNTIME_BYTES (1536000u + (SURFACE_IMAGE?8388608u:SURFACE_NOTES?3145728u:SURFACE_DIFF?1048576u:SURFACE_READER?786432u:SURFACE_DESKTOP?786432u:262144u) + 65536u + 4096u + SURFACE_LCD_ENABLE * 1536000u)
 #endif
@@ -134,6 +137,11 @@ int surface_runtime_heap_report(void);
 void surface_runtime_fail_at(unsigned attempt);
 /** @brief Firmware PSRAM reservation, 64-byte aligned; exclusive until release. */
 void *surface_os_reserve(size_t bytes);
+#ifdef SURFACE_FRAMES_BYTES
+/** @brief The native desktop's frame buffers, SURFACE_FRAMES_BYTES in a
+ *         reservation of their own, 64-byte aligned; kept until restart. */
+void *surface_os_reserve_frames(size_t bytes);
+#endif
 /** @brief Release that reservation after its occupants retire; 0 keeps it owned. */
 int surface_os_release(void *base);
 /** @brief Read monotonic microseconds in the kernel owner context. */

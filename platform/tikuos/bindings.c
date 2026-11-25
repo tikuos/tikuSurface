@@ -23,6 +23,18 @@ void *surface_os_reserve(size_t bytes)
     return arena.buf;
 }
 
+#ifdef SURFACE_FRAMES_BYTES
+static tiku_arena_t frames;
+
+void *surface_os_reserve_frames(size_t bytes)
+{
+    if (frames.active || !surface_os_in_owner() || bytes != SURFACE_FRAMES_BYTES) return NULL;
+    if (tiku_tier_arena_create_span(&frames, TIKU_MEM_PSRAM, 0, bytes, 64, 0x46) != TIKU_MEM_OK)
+        return NULL;
+    return frames.buf;
+}
+#endif
+
 int surface_os_release(void *base)
 {
     if (!arena.active || arena.buf != base || !surface_os_in_owner()) return 0;

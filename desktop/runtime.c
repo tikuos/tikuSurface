@@ -2,10 +2,11 @@
  * Authors: Ambuj Varshney <ambuj@tiku-os.org>
  * runtime.c - the kernel side of the TikuDesktop shell on the S31 panel.
  *
- * Start reserves the runtime's PSRAM span and divides it into the two RGB565
- * scanout buffers, the desktop thread's stack and the C-library heap; it
- * mounts the SD card without writing, seeds the desktop's random generator,
- * opens the panel and touch and starts the desktop thread.  Each owner turn
+ * Start reserves the two RGB565 frame buffers and opens the panel on them,
+ * then reserves the rest of the runtime's PSRAM: the desktop and job
+ * threads' stacks, the settings stages and the C-library heap; it mounts
+ * the SD card without writing, seeds the desktop's random generator, opens
+ * touch and starts the desktop thread.  Each owner turn
  * turns touch reports into pointer events for the desktop, converts and
  * submits a frame the desktop handed over for a bounded time, advances the
  * desktop's card request on the media bridge, and prints what the desktop
@@ -980,38 +981,53 @@ void surface_desktop_memory(surface_desktop_memory_t *m)
     m->below = rt.psram_below;
     m->tier = rt.psram_tier;
     m->spare = rt.psram_spare;
-    m->span = SURFACE_RUNTIME_BYTES;
-    m->frames = 2u * RGB_BYTES;
+    m->span = SURFACE_FRAMES_BYTES + SURFACE_RUNTIME_BYTES;
+    m->frames = SURFACE_FRAMES_BYTES;
     m->stack = STACK_BYTES;
     m->stack_used = rt.stack_used;
     m->jobs = JOBS_BYTES;
     m->jobs_used = rt.jobs_used;
     m->stages = STAGES_BYTES;
-    m->heap = SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES - JOBS_BYTES - STAGES_BYTES;
+    m->heap = SURFACE_RUNTIME_BYTES - STACK_BYTES - JOBS_BYTES - STAGES_BYTES;
 }
 
 int surface_runtime_start(void)
 {
-    unsigned char *span, *stack, *jobs, *stages, *heap;
+    unsigned char *frames, *span, *stack, *jobs, *stages, *heap;
     unsigned char record[SURFACE_SETTINGS_BYTES];
     size_t length = 0;
 
     clear_statics();
     if (rt.running) return 1;
-    span = surface_os_reserve(SURFACE_RUNTIME_BYTES);
-    if (span == NULL) return 0;
+    frames = surface_os_reserve_frames(SURFACE_FRAMES_BYTES);
+    if (frames == NULL) return 0;
     memset(&surface_desktop_bridge, 0, sizeof surface_desktop_bridge);
     memset(&rt, 0, sizeof rt);
+    rt.sample_dump = UINT32_MAX;
+    rt.stacks_dump = UINT32_MAX;
+    rt.rgb[0] = (uint16_t *)frames;
+    rt.rgb[1] = (uint16_t *)(frames + RGB_BYTES);
+    memset(rt.rgb[0], 0, 2u * RGB_BYTES);
+    /* The panel opens on the frames before the rest is reserved: its
+     * driver returns its own scan-out buffer to the PSRAM tier when it is
+     * handed them, and the rest takes that room. */
+    if (!surface_os_display_open(rt.rgb[0], rt.rgb[1]) ||
+        !surface_presentation_init(&rt.presentation, rt.rgb[0], RGB_BYTES, rt.rgb[1],
+                                   RGB_BYTES, 0, 4096, &rt.sequence, &scanout, NULL)) {
+        rt.failed = 1;
+        return 0;
+    }
+    span = surface_os_reserve(SURFACE_RUNTIME_BYTES);
+    if (span == NULL) {
+        rt.failed = 1;
+        return 0;
+    }
     /* PSRAM's extent, for the About box: figures the kernel gives only its
      * owner, the tier's free bytes again with each status line. */
     if (surface_os_psram_extent(&rt.psram, &rt.psram_below, &rt.psram_tier, &rt.psram_spare) != 0)
         rt.psram = rt.psram_below = rt.psram_tier = rt.psram_spare = 0;
-    rt.sample_dump = UINT32_MAX;
-    rt.stacks_dump = UINT32_MAX;
     rt.span = span;
-    rt.rgb[0] = (uint16_t *)span;
-    rt.rgb[1] = (uint16_t *)(span + RGB_BYTES);
-    stack = span + 2u * RGB_BYTES;
+    stack = span;
     jobs = stack + STACK_BYTES;
     stages = jobs + JOBS_BYTES;
     heap = stages + STAGES_BYTES;
@@ -1019,8 +1035,7 @@ int surface_runtime_start(void)
     for (uint32_t i = 0; i < STACK_BYTES / 4u; i++) rt.stack[i] = STACK_PAINT;
     rt.jobs = (uint32_t *)(void *)jobs;
     for (uint32_t i = 0; i < JOBS_BYTES / 4u; i++) rt.jobs[i] = STACK_PAINT;
-    memset(rt.rgb[0], 0, 2u * RGB_BYTES);
-    if (surface_os_desktop_heap_memory(heap, SURFACE_RUNTIME_BYTES - 2u * RGB_BYTES - STACK_BYTES -
+    if (surface_os_desktop_heap_memory(heap, SURFACE_RUNTIME_BYTES - STACK_BYTES -
                                        JOBS_BYTES - STAGES_BYTES) != 0 ||
         surface_os_desktop_jobs_memory(jobs, JOBS_BYTES) != 0 ||
         surface_os_desktop_store_memory(stages, STAGES_BYTES) != 0 ||
@@ -1048,12 +1063,6 @@ int surface_runtime_start(void)
     rt.map_status = surface_settings_load(
         surface_os_settings_read(record, sizeof record, &length), record, (unsigned)length,
         &rt.map);
-    if (!surface_os_display_open(rt.rgb[0], rt.rgb[1]) ||
-        !surface_presentation_init(&rt.presentation, rt.rgb[0], RGB_BYTES, rt.rgb[1],
-                                   RGB_BYTES, 0, 4096, &rt.sequence, &scanout, NULL)) {
-        rt.failed = 1;
-        return 0;
-    }
     rt.input_open = surface_os_input_open(&rt.input_owned);
     if (surface_os_desktop_start(desktop_thread, NULL, stack, STACK_BYTES) != 0) {
         rt.failed = 1;

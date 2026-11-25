@@ -31,11 +31,13 @@ defaults to the pinned `foundation/`.
 
 ## Runtime
 
-Start reserves the runtime's PSRAM span for two RGB565 frame buffers, the
+Start reserves two RGB565 frame buffers in the PSRAM tier and opens the panel
+on them; the display driver then returns its own 768,000-byte scan-out
+buffer. Start reserves the rest after that, in the room the driver left: the
 desktop thread's 2.75 MiB stack, the job thread's 384 KiB stack, the settings
-files' stages and the C library's heap. It mounts the SD card
-without writing, seeds the desktop's random generator, opens the panel and
-touch, and starts the desktop on a TikuOS thread. Each owner turn turns touch
+files' stages and the C library's heap, 9,275,392 bytes. It mounts the SD
+card without writing, seeds the desktop's random generator, opens touch, and
+starts the desktop on a TikuOS thread. Each owner turn turns touch
 reports into pointer events, presents a frame the desktop handed over and
 advances the desktop's card request. The shell's zero-initialized statics sit
 in a 640 KiB section at the top of PSRAM; the firmware's PSRAM tier ends below it.
@@ -44,11 +46,12 @@ The About box draws the panel's SRAM, PSRAM and flash as bars, each with its
 areas and what is in use, from `tiku_sys_memory_map()` in `desktop/sys.c`:
 the kernel's `/sys/mem/sram_map` and `/sys/mem/nvm_map`, and PSRAM in address
 order, the file store's shadow below the kernel's tier, the tier's free bytes,
-the drivers' buffers in it (the panel's scan-out and the card's bitmap), the
-runtime's frames, the two stacks with their deepest use, the stages and the
-heap with the bytes its allocator has handed out, then the shell's statics.
-Its free memory is the heap less those bytes. Hosted in the desktop's process,
-the box takes about 2 MB of the heap while it is open.
+the drivers' buffers in it (the card's bitmap), the two stacks with their
+deepest use, the stages, the heap with the bytes its allocator has handed out
+and the runtime's frames, then the shell's statics. Its free memory is the
+heap less those bytes. The desktop draws the box on its own surface through
+the box's painter (`open_drawn` in Stomme's application services), so the box
+keeps no pixels: it takes about 46 KB of the heap while it is open.
 
 ## Clock
 

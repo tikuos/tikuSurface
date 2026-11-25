@@ -88,9 +88,9 @@ static void tagged(char *out, size_t max, size_t *at, const char *tag, const cha
 
 /* The kernel's SRAM and flash maps; PSRAM in address order: the file
  * store's shadow below the kernel's tier; in the tier, its free bytes, the
- * kernel's drivers' buffers (the panel's scanout and the card's bitmap) and
- * the runtime's span: frames, the two stacks, settings stages and heap;
- * above the tier, the desktop's statics. */
+ * kernel's drivers' buffers (the card's bitmap), the runtime's two stacks,
+ * settings stages and heap, and its frames at the tier's top; above the
+ * tier, the desktop's statics. */
 int tiku_sys_memory_map(char *out, size_t max)
 {
     char text[768];
@@ -106,15 +106,15 @@ int tiku_sys_memory_map(char *out, size_t max)
         char psram[512];
 
         snprintf(psram, sizeof psram,
-                 "total\t%lu\nshadow\t%lu\nfree\t%lu\ndrivers\t%lu\nframes\t%lu\n"
+                 "total\t%lu\nshadow\t%lu\nfree\t%lu\ndrivers\t%lu\n"
                  "stack\t%lu\t%lu\njobs\t%lu\t%lu\nsettings\t%lu\nheap\t%lu\t%lu\n"
-                 "static\t%lu\n",
+                 "frames\t%lu\nstatic\t%lu\n",
                  (unsigned long)m.psram, (unsigned long)m.below, (unsigned long)spare,
                  (unsigned long)(m.tier > spare + m.span ? m.tier - spare - m.span : 0u),
-                 (unsigned long)m.frames,
                  (unsigned long)m.stack, (unsigned long)(m.stack - m.stack_used),
                  (unsigned long)m.jobs, (unsigned long)(m.jobs - m.jobs_used),
                  (unsigned long)m.stages, (unsigned long)m.heap, (unsigned long)live,
+                 (unsigned long)m.frames,
                  (unsigned long)(m.psram > m.below + m.tier ? m.psram - m.below - m.tier : 0u));
         tagged(out, max, &at, "psram", psram);
     }

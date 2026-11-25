@@ -56,8 +56,10 @@ size_t surface_os_desktop_heap_live(void) { return 3600000u; }
 
 void surface_desktop_memory(surface_desktop_memory_t *m)
 {
-    *m = (surface_desktop_memory_t){ psram_size, 1802240u, 14319616u, 121264u, 13369344u, 1536000u,
-                                     2883584u, 2716420u, 393216u, 17188u, 49152u, 8507392u };
+    /* The runtime's PSRAM: its frames and the rest, 1,536,000 and
+     * 12,601,344 bytes, with the heap the rest less the stacks and stages. */
+    *m = (surface_desktop_memory_t){ psram_size, 1802240u, 14319616u, 121264u, 14137344u, 1536000u,
+                                     2883584u, 2716420u, 393216u, 17188u, 49152u, 9275392u };
 }
 
 int main(void)
@@ -76,12 +78,14 @@ int main(void)
     assert(strstr(map, "sram\tbank\t393216\nsram\tstatic\t196224\nsram\ttier\t180608\t0\t1\n"));
     assert(strstr(map, "sram\tstack\t16384\t11812\npsram\ttotal\t16777216\n"));
     /* PSRAM in address order: shadow, the tier's free bytes, the drivers'
-     * buffers (the tier less its free bytes and the span), the span's parts
-     * with the stacks' headroom and the heap in use, then the statics. */
-    assert(strstr(map, "psram\tshadow\t1802240\npsram\tfree\t121264\npsram\tdrivers\t829008\n"
-                       "psram\tframes\t1536000\npsram\tstack\t2883584\t167164\n"
+     * buffers (the tier less its free bytes and the runtime's), the stacks
+     * with their headroom, the stages, the heap in use, the frames at the
+     * tier's top, then the statics. */
+    assert(strstr(map, "psram\tshadow\t1802240\npsram\tfree\t121264\npsram\tdrivers\t61008\n"
+                       "psram\tstack\t2883584\t167164\n"
                        "psram\tjobs\t393216\t376028\npsram\tsettings\t49152\n"
-                       "psram\theap\t8507392\t3600000\npsram\tstatic\t655360\n"
+                       "psram\theap\t9275392\t3600000\npsram\tframes\t1536000\n"
+                       "psram\tstatic\t655360\n"
                        "nvm\tkind\tFlash\n"));
     assert(strstr(map, "nvm\tstore\t1736704\t49152\n") && map[n - 1] == '\n');
 
