@@ -122,8 +122,9 @@ $(DESKTOP_BUILD)/platform/%.o: $(DESKTOP_ROOT)/desktop/%.c $(DESKTOP_HEADERS)
 # the place of the full one, since the source includes it by name.
 $(DESKTOP_GEN)/fonts/tiku_font_data.h: $(F)/kits/interface/tiku_font_data.h $(DESKTOP_ROOT)/tools/desktop_fonts.py
 	python3 $(DESKTOP_ROOT)/tools/desktop_fonts.py --input $< --output $@ --last-codepoint $(DESKTOP_FONT_LAST)
-$(DESKTOP_GEN)/fonts/tiku_font.c: $(F)/kits/interface/tiku_font.c $(DESKTOP_GEN)/fonts/tiku_font_data.h
-	cp $(F)/kits/interface/tiku_font.c $(F)/kits/interface/tiku_font_utf8.inl $(F)/kits/interface/tiku_font_blend.inl $(@D)/
+DESKTOP_FONT_SOURCES := $(addprefix $(F)/kits/interface/,tiku_font.c tiku_font_utf8.inl tiku_font_blend.inl)
+$(DESKTOP_GEN)/fonts/tiku_font.c: $(DESKTOP_FONT_SOURCES) $(DESKTOP_GEN)/fonts/tiku_font_data.h
+	cp $(DESKTOP_FONT_SOURCES) $(@D)/
 $(DESKTOP_BUILD)/fonts/tiku_font.o: $(DESKTOP_GEN)/fonts/tiku_font.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) -MMD -MP -c -o $@ $<
