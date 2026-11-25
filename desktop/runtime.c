@@ -438,6 +438,20 @@ int surface_desktop_camera_result(uint32_t *len)
     return b->cam_result;
 }
 
+uint32_t surface_desktop_camera_picture(unsigned *half)
+{
+    uint32_t picture = surface_desktop_bridge.cam_picture;
+
+    if (half) *half = picture & 1u;
+    return picture >> 1;
+}
+
+void surface_desktop_camera_drawn(uint32_t us)
+{
+    surface_desktop_bridge.cam_draw_us = us;
+    surface_desktop_bridge.cam_drawn++;
+}
+
 /** @brief Advance the desktop's camera request by one turn; nonzero when
  *  it finished.  A frame or an encode starts on one turn and is polled on
  *  the later ones; open and close finish in the turn that starts them. */
@@ -454,9 +468,16 @@ static int camera_step(void)
         case SURFACE_CAM_OPEN:
             rc = cam_opened ? SURFACE_CAMERA_OK : surface_os_camera_open();
             cam_opened = rc == SURFACE_CAMERA_OK;
+            if (cam_opened) rc = surface_os_camera_stream(b->cam_frame);
+            break;
+        case SURFACE_CAM_STREAM:
+            if (cam_opened) rc = surface_os_camera_stream(b->cam_frame);
             break;
         case SURFACE_CAM_CLOSE:
-            if (cam_opened) surface_os_camera_close();
+            if (cam_opened) {
+                (void)surface_os_camera_stream(NULL);
+                surface_os_camera_close();
+            }
             cam_opened = 0;
             rc = SURFACE_CAMERA_OK;
             break;
@@ -482,6 +503,22 @@ static int camera_step(void)
     b->cam_len = len;
     b->cam_result = rc;
     b->cam_done = token;
+    return 1;
+}
+
+/** @brief Keep the newest streamed picture on the bridge, the cache's copy
+ *  of its half dropped first; nonzero when it changed, so the desktop wakes
+ *  to draw it. */
+static int camera_watch(void)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+    unsigned half = 0;
+    uint32_t n = cam_opened ? surface_os_camera_newest(&half) : 0u;
+    uint32_t picture = n ? n << 1 | half : 0u;
+
+    if (picture == b->cam_picture) return 0;
+    if (n) surface_os_camera_drop(b->cam_frame, half);
+    b->cam_picture = picture;
     return 1;
 }
 
@@ -1247,6 +1284,7 @@ int surface_runtime_poll(void)
     }
     if (map_step()) woke = 1;
     if (camera_step()) woke = 1;
+    if (camera_watch()) woke = 1;
     /* A request that may not have the processor is polled once a turn. */
     if (card_pending() && !card_urgent() && card_step()) woke = 1;
     while (card_pending() && card_urgent() &&
@@ -1299,7 +1337,8 @@ int surface_runtime_poll(void)
                      " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu canary=%u locks=%u/%u/%u"
                      " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
-                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu ring_lost=%lu\n",
+                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu ring_lost=%lu"
+                     " camera=%lu/%lu/%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
                      b->event_head, b->event_tail, (unsigned long)b->frame_token,
                      (unsigned long)b->done_token, rt.presentation.phase,
@@ -1318,7 +1357,9 @@ int surface_runtime_poll(void)
                      (unsigned long)card_polls, (unsigned long)card_last_us, (unsigned long)card_max_us,
                      (unsigned long)(card_total_us / 1000u), (unsigned long)mutations,
                      (unsigned long)ppa_jobs, (unsigned long)ppa_failed,
-                     (unsigned long)ppa_wakes, (unsigned long)ppa_us, surface_board_lost());
+                     (unsigned long)ppa_wakes, (unsigned long)ppa_us, surface_board_lost(),
+                     (unsigned long)(b->cam_picture >> 1), (unsigned long)b->cam_drawn,
+                     (unsigned long)b->cam_draw_us);
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);
     }
     if (b->exited == 1) {

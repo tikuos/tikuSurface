@@ -49,7 +49,7 @@ static tiku_window_t *camera_entry(tiku_workspace_t *workspace, tiku_rect_t area
     last_area = area;
     last_dirty = dirty;
     if (path != NULL) return image_open(workspace, area, dirty, path);
-    return surface_camera_open(workspace, area, dirty, review);
+    return surface_camera_open(workspace, area, dirty, tiku_trk_builtin_damage, review);
 }
 /** @brief Each desktop turn: the viewer's Watch refresh and the camera's
  *         requests. */

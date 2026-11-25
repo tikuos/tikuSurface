@@ -107,18 +107,29 @@ or BMP file, from Tracker through the launcher's host for built-in
 applications, it shows the file in TikuImage's viewer from Stomme's
 `packages/apps/apps/image`.
 
-Camera's window (`desktop/camera.c`) asks the owner turn for one 1280 by 720
-UYVY frame at a time through the bridge's camera request, served by
-`platform/tikuos/camera.c` over the S31's DVP camera driver, and paints it
-fitted into its view. It asks for the next frame once the last is painted:
-about four a second while the sensor runs at its 10 MHz clock. Take photo
-encodes the frame shown with the S31's JPEG encoder at quality 80 into a
-512 KiB buffer, about 60 KB for a room scene, and a job saves it as
+Camera's window (`desktop/camera.c`) asks the owner turn, through the
+bridge's camera request served by `platform/tikuos/camera.c`, to start the
+S31's DVP camera streaming: 10.4 pictures a second, each every other line of
+a 1280 by 720 UYVY frame, into the two halves of a 1,843,200-byte buffer
+from the heap. The owner turn drops the cache's copy of each new picture's
+half and publishes its number and half on the bridge, waking the desktop.
+Each desktop turn the window compares the number with the one it last drew
+and, when it changed, asks for its picture rectangle alone to be drawn
+again (`tiku_trk_builtin_damage()`). The window is opaque, so that frame
+draws nothing under it; the window converts the picture on the processor,
+one pair of pixels to one pixel, its two lumas averaged, into a 640 by 360
+rectangle, or 320 by 180 and smaller in a smaller window. On the panel the
+conversion takes 44 ms and Camera shows about 8 pictures a second; it needs
+PSRAM at 200 MHz, at 80 MHz scanout underruns.
+
+Take photo captures one whole frame in the stream's buffer, encodes it with
+the S31's JPEG encoder at quality 80 into a 512 KiB buffer, about 60 KB for a
+room scene, and starts the stream again while a job saves the photo as
 `~/Pictures/photo-YYYYMMDD-HHMMSS.jpg` on the card, numbered when the second
-is taken; Photos shows the last one saved in the viewer. The frame's
-1,843,200 bytes come from the heap while the window is open, and the photo's
-buffer while it is encoded and saved; closing the window stops the sensor
-once its request ends and frees the frame then.
+is taken; the view says so meanwhile. Photos shows the last one saved in
+the viewer. The photo's buffer comes from the heap while it is encoded and
+saved; closing the window stops the stream and the sensor once the running
+request ends and frees the frame then.
 
 The viewer's window fills the screen below the bar, and it decodes each
 picture no larger than its view, after letting the one shown go: a baseline

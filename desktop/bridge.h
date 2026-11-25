@@ -65,6 +65,14 @@ typedef struct {
     volatile uint32_t cam_len;
     volatile int cam_result;                    /* SURFACE_CAMERA_* */
     volatile unsigned cam_token, cam_done;
+    /* The newest streamed picture: its number, from 1, times two plus the
+     * half of cam_frame that holds it, the cache's copy of that half
+     * dropped; 0 when none streams.  The kernel's turns keep it and wake
+     * the desktop when it changes. */
+    volatile uint32_t cam_picture;
+    /* The pictures the desktop has drawn and the last one's microseconds,
+     * for the status line. */
+    volatile uint32_t cam_drawn, cam_draw_us;
 } surface_desktop_bridge_t;
 
 /** @brief What the desktop asks of the touch map. */
@@ -76,10 +84,12 @@ enum {
 
 /** @brief What the desktop asks of the camera. */
 enum {
-    SURFACE_CAM_OPEN = 1,   /* start the sensor */
-    SURFACE_CAM_FRAME,      /* capture one whole frame into cam_frame */
+    SURFACE_CAM_OPEN = 1,   /* start the sensor and stream into cam_frame */
+    SURFACE_CAM_FRAME,      /* capture one whole frame into cam_frame,
+                             * ending the stream */
     SURFACE_CAM_ENCODE,     /* encode cam_frame into cam_out */
-    SURFACE_CAM_CLOSE       /* stop the sensor */
+    SURFACE_CAM_STREAM,     /* stream into cam_frame again */
+    SURFACE_CAM_CLOSE       /* stop the stream and the sensor */
 };
 
 /** @brief The one bridge, owned by desktop/runtime.c. */
@@ -107,6 +117,12 @@ int surface_desktop_camera(int kind, void *frame, uint8_t *out, uint32_t cap,
 /** @brief The last camera request's state: SURFACE_CAMERA_BUSY while it
  *  runs, otherwise its result and, for an encode, *@p len. */
 int surface_desktop_camera_result(uint32_t *len);
+/** @brief The newest streamed picture's number, from 1, and in *@p half the
+ *  half of the frame that holds it, ready to read; 0 when none streams. */
+uint32_t surface_desktop_camera_picture(unsigned *half);
+/** @brief Count a picture drawn in @p us microseconds, for the status
+ *  line. */
+void surface_desktop_camera_drawn(uint32_t us);
 
 /** @brief The desktop runtime's memory, in bytes: PSRAM, the part below the
  *  kernel's tier, the tier and its bytes not reserved (0 when unknown, the
