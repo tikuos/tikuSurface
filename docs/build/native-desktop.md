@@ -101,10 +101,26 @@ output from a key seeded once at start. Tracker starts with image thumbnails off
 ## Applications
 
 `desktop/builtins.c` lists the applications linked into the desktop, which
-open their windows in its own workspace: TikuImage, from Stomme's
-`packages/apps/apps/image`, for PNG, JPEG and BMP files. The launcher hands
-it a document Tracker opens through its host for built-in applications. Its
-window fills the screen below the bar, and it decodes each
+open their windows in its own workspace: Camera, in the Deskbar's Graphics &
+Design group. Opened alone it shows the board's camera; handed a PNG, JPEG
+or BMP file, from Tracker through the launcher's host for built-in
+applications, it shows the file in TikuImage's viewer from Stomme's
+`packages/apps/apps/image`.
+
+Camera's window (`desktop/camera.c`) asks the owner turn for one 1280 by 720
+UYVY frame at a time through the bridge's camera request, served by
+`platform/tikuos/camera.c` over the S31's DVP camera driver, and paints it
+fitted into its view. It asks for the next frame once the last is painted:
+about four a second while the sensor runs at its 10 MHz clock. Take photo
+encodes the frame shown with the S31's JPEG encoder at quality 80 into a
+512 KiB buffer, about 60 KB for a room scene, and a job saves it as
+`~/Pictures/photo-YYYYMMDD-HHMMSS.jpg` on the card, numbered when the second
+is taken; Photos shows the last one saved in the viewer. The frame's
+1,843,200 bytes come from the heap while the window is open, and the photo's
+buffer while it is encoded and saved; closing the window stops the sensor
+once its request ends and frees the frame then.
+
+The viewer's window fills the screen below the bar, and it decodes each
 picture no larger than its view, after letting the one shown go: a baseline
 JPEG of one scan is converted a row of MCUs at a time, its planes reduced to
 a half, quarter or eighth of each block by the means of the samples they

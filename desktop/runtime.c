@@ -22,6 +22,7 @@
 #include "../platform/tikuos/display.h"
 #include "../platform/tikuos/input.h"
 #include "../platform/tikuos/settings_io.h"
+#include "../platform/tikuos/camera.h"
 #include "board.h"
 #include "gesture.h"
 #include "tiku_trk_deskbar.h"
@@ -405,6 +406,84 @@ int tiku_shell_touch_fit(int x0, int x1, int y0, int y1)
 int tiku_shell_touch_keep(void) { return map_request(SURFACE_MAP_KEEP, NULL); }
 
 void tiku_shell_touch_revert(void) { (void)map_request(SURFACE_MAP_REVERT, NULL); }
+
+/* The camera request the kernel has started, by token, 0 for none; and
+ * whether the sensor is open. */
+static unsigned cam_started;
+static int cam_opened;
+
+int surface_desktop_camera(int kind, void *frame, uint8_t *out, uint32_t cap,
+                           unsigned quality)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+
+    if (b->cam_done != b->cam_token) return -1;
+    b->cam_kind = kind;
+    b->cam_frame = frame;
+    b->cam_out = out;
+    b->cam_cap = cap;
+    b->cam_quality = quality;
+    b->cam_len = 0;
+    b->cam_token++;
+    surface_os_desktop_kick();
+    return 0;
+}
+
+int surface_desktop_camera_result(uint32_t *len)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+
+    if (b->cam_done != b->cam_token) return SURFACE_CAMERA_BUSY;
+    if (len) *len = b->cam_len;
+    return b->cam_result;
+}
+
+/** @brief Advance the desktop's camera request by one turn; nonzero when
+ *  it finished.  A frame or an encode starts on one turn and is polled on
+ *  the later ones; open and close finish in the turn that starts them. */
+static int camera_step(void)
+{
+    surface_desktop_bridge_t *b = &surface_desktop_bridge;
+    unsigned token = b->cam_token;
+    int rc = SURFACE_CAMERA_ERROR;
+    uint32_t len = 0;
+
+    if (b->cam_done == token) return 0;
+    if (cam_started != token) {
+        switch (b->cam_kind) {
+        case SURFACE_CAM_OPEN:
+            rc = cam_opened ? SURFACE_CAMERA_OK : surface_os_camera_open();
+            cam_opened = rc == SURFACE_CAMERA_OK;
+            break;
+        case SURFACE_CAM_CLOSE:
+            if (cam_opened) surface_os_camera_close();
+            cam_opened = 0;
+            rc = SURFACE_CAMERA_OK;
+            break;
+        case SURFACE_CAM_FRAME:
+            if (cam_opened) rc = surface_os_camera_capture(b->cam_frame);
+            break;
+        case SURFACE_CAM_ENCODE:
+            rc = surface_os_camera_encode(b->cam_frame, b->cam_quality, b->cam_out, b->cam_cap);
+            break;
+        default:
+            break;
+        }
+        if (rc == SURFACE_CAMERA_BUSY) {
+            cam_started = token;
+            return 0;
+        }
+    } else {
+        rc = b->cam_kind == SURFACE_CAM_FRAME ? surface_os_camera_capture_poll() :
+             surface_os_camera_encode_poll(&len);
+        if (rc == SURFACE_CAMERA_BUSY) return 0;
+        cam_started = 0;
+    }
+    b->cam_len = len;
+    b->cam_result = rc;
+    b->cam_done = token;
+    return 1;
+}
 
 /** @brief Answer the desktop's touch map request, if one waits: a fit
  *  corrects the map in force and stores nothing, keep stores it, and revert
@@ -1167,6 +1246,7 @@ int surface_runtime_poll(void)
         }
     }
     if (map_step()) woke = 1;
+    if (camera_step()) woke = 1;
     /* A request that may not have the processor is polled once a turn. */
     if (card_pending() && !card_urgent() && card_step()) woke = 1;
     while (card_pending() && card_urgent() &&

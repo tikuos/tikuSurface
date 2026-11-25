@@ -23,6 +23,9 @@ APPL_SRCS += interfaces/input/tiku_touch_gt1151.c drivers/input/gt1151/tiku_drv_
 APPL_SRCS += interfaces/display/tiku_display.c interfaces/display/tiku_display_async.c \
     arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_lcdcam_arch.c arch/esp32s31/tiku_dma_arch.c \
     arch/esp32s31/tiku_ppa_arch.c arch/esp32s31/tiku_dma2d_arch.c
+# Camera: the SC101IOT on the DVP port and the JPEG encoder.
+APPL_SRCS += $(SURFACE_ROOT)/platform/tikuos/camera.c arch/esp32s31/tiku_camera_arch.c \
+    arch/esp32s31/tiku_jpeg_arch.c
 # SURFACE_PPA=1 converts the frame into the panel's format by the S31's
 # Pixel Processing Accelerator, with the CPU's loop the fallback; 0 leaves
 # the conversion to the CPU.

@@ -20,6 +20,8 @@ describes.
 | --- | --- | --- | --- | --- |
 | Panel scan-out | `tiku_display_init`, `_set_buffers`, `_submit`, `_poll`, `tiku_s31_psram_sync`; the driver returns its own scan-out buffer when handed the frames | `platform/tikuos/display.c` | Owner turn | Frame |
 | Touch reports | `tiku_touch_poll` on the I2C bus, inside a time budget | `platform/tikuos/input.c` | Owner turn | Report |
+| The camera | `tiku_s31_camera_open`, `_capture`, `_poll`, `_close`: the SC101IOT on the DVP port, its frames into a buffer from the desktop's heap | `platform/tikuos/camera.c`, the bridge's camera request | Owner turn | Camera window |
+| JPEG encoding | `tiku_s31_jpeg_encode`, `_poll` on the S31's codec | `platform/tikuos/camera.c`, the bridge's camera request | Owner turn | Photo |
 | Desktop memory | Two PSRAM tier arenas, `tiku_tier_arena_create_span`: the frames before the panel opens, the stacks, stages and heap after | `surface_os_reserve_frames()`, `surface_os_reserve()` in `platform/tikuos/bindings.c` | Start | Until restart |
 | The desktop thread | `tiku_thread_start`, `_wait`, `_wake_all`, `_exit` | `platform/tikuos/desktop_bindings.c` | Desktop thread | Until restart |
 | The owner turn | One process, `surface_process`, woken by a timer and by polls | `platform/tikuos/bindings.c` | Kernel | Until restart |

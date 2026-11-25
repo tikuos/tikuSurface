@@ -1,24 +1,27 @@
 /*
  * Authors: Ambuj Varshney <ambuj@tiku-os.org>
  * builtins.c - the applications linked into the desktop, whose windows open
- * in its own workspace: TikuImage, for the pictures on the card.
+ * in its own workspace: Camera, for the board's camera and the pictures on
+ * the card, which it shows in TikuImage's viewer.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "camera.h"
 #include "tiku_app_product.h"
 #include "tiku_image_window.h"
 #include "tiku_trk_builtin.h"
-
 /* TikuImage's viewer, made at its first open and kept while its window
  * closes and opens again. */
 static tiku_image_window_t *viewer;
-
+/* Where Camera last opened, for the viewer it opens on a saved photo. */
+static tiku_workspace_t *last_workspace;
+static tiku_rect_t last_area;
+static int *last_dirty;
 /** @brief Open @p path, or the viewer alone, its window filling @p area
  *         whenever it opens anew. */
 static tiku_window_t *image_open(tiku_workspace_t *workspace, tiku_rect_t area,
                                  int *dirty, const char *path)
 {
     int fresh;
-
     if (viewer == NULL) {
         viewer = tiku_image_window_new(workspace, dirty, NULL, NULL);
         if (viewer == NULL) return NULL;
@@ -33,21 +36,34 @@ static tiku_window_t *image_open(tiku_workspace_t *workspace, tiku_rect_t area,
     if (path != NULL) (void)tiku_image_window_file(viewer, path);
     return tiku_image_window_handle(viewer);
 }
-
-/** @brief Each desktop turn: the viewer's Watch refresh. */
-static void image_tick(int64_t now)
+/** @brief Show the photo Camera saved at @p path in the viewer. */
+static void review(const char *path)
+{
+    if (last_workspace != NULL) (void)image_open(last_workspace, last_area, last_dirty, path);
+}
+/** @brief Open picture @p path in the viewer, or Camera when there is none. */
+static tiku_window_t *camera_entry(tiku_workspace_t *workspace, tiku_rect_t area,
+                                   int *dirty, const char *path)
+{
+    last_workspace = workspace;
+    last_area = area;
+    last_dirty = dirty;
+    if (path != NULL) return image_open(workspace, area, dirty, path);
+    return surface_camera_open(workspace, area, dirty, review);
+}
+/** @brief Each desktop turn: the viewer's Watch refresh and the camera's
+ *         requests. */
+static void camera_tick(int64_t now)
 {
     tiku_image_window_tick(viewer, now);
+    surface_camera_tick(now);
 }
-
 const tiku_trk_builtin_t *tiku_trk_builtins(int *count)
 {
     static const tiku_trk_builtin_t list[] = {
-        {TIKU_PRODUCT_IMAGE_ID, TIKU_PRODUCT_IMAGE_NAME,
-         "image/png,image/jpeg,image/bmp,image/x-ms-bmp", "image_viewer", "graphics",
-         image_open, image_tick},
+        {"camera", "Camera", "image/png,image/jpeg,image/bmp,image/x-ms-bmp",
+         "image_viewer", "graphics", camera_entry, camera_tick},
     };
-
     *count = (int)(sizeof list / sizeof list[0]);
     return list;
 }

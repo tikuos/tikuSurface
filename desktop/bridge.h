@@ -54,6 +54,17 @@ typedef struct {
     int map_edge[4];                            /* left, right, top, bottom */
     volatile int map_result;                    /* 0, or -1 when refused */
     volatile unsigned map_token, map_done;
+    /* One camera request at a time: the desktop sets cam_kind and its
+     * buffers and bumps cam_token; the kernel runs it over its turns,
+     * answers in cam_result, and for an encode cam_len, and sets cam_done
+     * to that token. */
+    volatile int cam_kind;                      /* SURFACE_CAM_* */
+    void *cam_frame;                            /* a UYVY frame's buffer */
+    uint8_t *cam_out;                           /* an encode's output */
+    uint32_t cam_cap, cam_quality;
+    volatile uint32_t cam_len;
+    volatile int cam_result;                    /* SURFACE_CAMERA_* */
+    volatile unsigned cam_token, cam_done;
 } surface_desktop_bridge_t;
 
 /** @brief What the desktop asks of the touch map. */
@@ -61,6 +72,14 @@ enum {
     SURFACE_MAP_FIT = 1,    /* correct it from the edges it now reports */
     SURFACE_MAP_KEEP,       /* store the map in force */
     SURFACE_MAP_REVERT      /* put the stored map back in force */
+};
+
+/** @brief What the desktop asks of the camera. */
+enum {
+    SURFACE_CAM_OPEN = 1,   /* start the sensor */
+    SURFACE_CAM_FRAME,      /* capture one whole frame into cam_frame */
+    SURFACE_CAM_ENCODE,     /* encode cam_frame into cam_out */
+    SURFACE_CAM_CLOSE       /* stop the sensor */
 };
 
 /** @brief The one bridge, owned by desktop/runtime.c. */
@@ -81,6 +100,13 @@ void surface_desktop_card(surface_media_io_t *io);
 unsigned surface_desktop_card_foreign(void);
 /** @brief Monotonic microseconds since boot. */
 uint64_t surface_desktop_now_us(void);
+/** @brief On the desktop thread: hand the kernel camera request @p kind with
+ *  its buffers.  @return 0 when handed, -1 while the last one runs. */
+int surface_desktop_camera(int kind, void *frame, uint8_t *out, uint32_t cap,
+                           unsigned quality);
+/** @brief The last camera request's state: SURFACE_CAMERA_BUSY while it
+ *  runs, otherwise its result and, for an encode, *@p len. */
+int surface_desktop_camera_result(uint32_t *len);
 
 /** @brief The desktop runtime's memory, in bytes: PSRAM, the part below the
  *  kernel's tier, the tier and its bytes not reserved (0 when unknown, the
