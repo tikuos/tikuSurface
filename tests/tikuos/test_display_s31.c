@@ -21,10 +21,13 @@ static volatile uint32_t *reg(uintptr_t address)
     return &registers[register_count++];
 }
 #define TIKU_S31_DISPLAY_REG(a) (*reg(a))
+#define TIKU_S31_LCDCAM_REG(a) (*reg(a))
 #define TIKU_S31_DISPLAY_FENCE() ((void)0)
 #define TIKU_S31_PSRAM_MHZ 80
 void tiku_clock_arch_delay(unsigned int ms);
 #include <arch/esp32s31/tiku_display_arch.c>
+#undef REG
+#include <arch/esp32s31/tiku_lcdcam_arch.c>
 
 volatile uint8_t tiku_s31_in_trap;
 static int in_kernel = 1, sync_error;

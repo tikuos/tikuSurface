@@ -317,7 +317,7 @@ APPL_SRCS += $(SURFACE_ROOT)/platform/tikuos/display.c $(SURFACE_ROOT)/platform/
 APPL_SRCS += services/storage/tiku_media_async.c services/storage/tiku_media_mutation.c services/storage/tiku_media_checkpoint.c arch/esp32s31/tiku_storage_async_io.c
 APPL_SRCS += interfaces/input/tiku_touch_gt1151.c drivers/input/gt1151/tiku_drv_input_gt1151.c
 APPL_SRCS += interfaces/display/tiku_display.c interfaces/display/tiku_display_async.c \
-    arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_dma_arch.c
+    arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_lcdcam_arch.c arch/esp32s31/tiku_dma_arch.c
 endif
 ifeq ($(SURFACE_VFS)$(S31_SURFACE_LCD),11)
 APPL_SRCS += $(SURFACE_ROOT)/platform/tikuos/vfs_io.c
