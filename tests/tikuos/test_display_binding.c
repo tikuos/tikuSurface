@@ -8,6 +8,8 @@
 #include <interfaces/display/tiku_display.h>
 #include <arch/esp32s31/tiku_display_arch.h>
 #include <arch/esp32s31/tiku_psram_arch.h>
+#include <arch/esp32s31/tiku_ppa_arch.h>
+#include <arch/esp32s31/tiku_runtime_arch.h>
 #include <assert.h>
 #include <stdio.h>
 
@@ -18,6 +20,23 @@ static unsigned calls;
 static uint32_t caps = TIKU_DISPLAY_CAP_FLIP | TIKU_DISPLAY_CAP_ASYNC;
 static tiku_display_t *active;
 int surface_os_in_owner(void) { return owner; }
+/* The S31 pixel accelerator: a job is recorded, its end is reported by
+ * poll_rc, and the job-end callback is kept as notify registered it. */
+static void (*job_end)(void);
+static unsigned wakes, jobs;
+static int convert_rc = TIKU_S31_PPA_OK, ppa_rc = TIKU_S31_PPA_RUNNING;
+static tiku_s31_picture_t job_out, job_in;
+void surface_os_poll_isr(void) { wakes++; }
+uint64_t tiku_s31_time(void) { return 1600; }
+int tiku_s31_ppa_convert(const tiku_s31_picture_t *out, uint16_t ox, uint16_t oy,
+    const tiku_s31_picture_t *in, uint16_t ix, uint16_t iy, uint16_t w, uint16_t h)
+{
+    assert(ox == ix && oy == iy && w && h);
+    job_out = *out; job_in = *in; jobs++;
+    return convert_rc;
+}
+int tiku_s31_ppa_poll(void) { return ppa_rc; }
+int tiku_s31_ppa_notify(void (*fn)(void)) { job_end = fn; return 0; }
 int tiku_display_init(tiku_display_t *d, void *front, uint16_t w, uint16_t h)
 {
     assert(!initialized && front == pixels[0] && w == 800 && h == 480);
@@ -130,7 +149,28 @@ int main(void)
     assert(!surface_os_display_amend(0, 0, 0, 800, 1) && surface_os_display_amend(1, 0, 479, 800, 1));
     assert(syncs == 1 && covers(0, 1, 479, 0, 800));
     assert(surface_os_display_submit(1, 31, 4, 2, 3, 23) == SURFACE_SCANOUT_ERROR);
-    assert(surface_os_display_close() && surface_os_display_close() && !initialized);
-    puts("Display binding: context, partial open, close retry, back buffer, shown-buffer write-back and terminal result mapping passed");
+    /* Conversion into the back buffer, 0 after the flips above, by the
+     * accelerator; its end wakes the owner through the callback open
+     * registered. */
+    static uint32_t argb[800 * 480];
+    assert(job_end && surface_os_display_convert_wakes());
+    assert(surface_os_display_convert(1, argb, 3200, 0, 0, 800, 480) == SURFACE_SCANOUT_REFUSED);
+    assert(surface_os_display_convert(0, argb, 3199, 0, 0, 800, 480) == SURFACE_SCANOUT_REFUSED);
+    assert(surface_os_display_convert(0, argb, 3200, 700, 0, 101, 480) == SURFACE_SCANOUT_REFUSED && !jobs);
+    assert(surface_os_display_convert(0, argb, 3200, 10, 20, 30, 40) == SURFACE_SCANOUT_OK && jobs == 1);
+    assert(job_out.base == pixels[0] && job_out.bpp == 2 && job_in.base == argb && job_in.width == 800);
+    assert(surface_os_display_convert_poll() == SURFACE_SCANOUT_BUSY);
+    job_end();
+    ppa_rc = TIKU_S31_PPA_OK;
+    assert(wakes == 1 && surface_os_display_convert_poll() == SURFACE_SCANOUT_OK);
+    convert_rc = -1;
+    assert(surface_os_display_convert(0, argb, 3200, 10, 20, 30, 40) == SURFACE_SCANOUT_REFUSED);
+    ppa_rc = -1;
+    assert(surface_os_display_convert_poll() == SURFACE_SCANOUT_ERROR);
+    uint32_t done, failed, woken, last;
+    surface_os_display_convert_stats(&done, &failed, &woken, &last);
+    assert(done == 1 && failed == 2 && woken == 1);
+    assert(surface_os_display_close() && surface_os_display_close() && !initialized && !job_end);
+    puts("Display binding: context, partial open, close retry, back buffer, shown-buffer write-back, terminal result mapping and accelerator conversion passed");
     return 0;
 }
