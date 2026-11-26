@@ -30,10 +30,9 @@ void surface_os_desktop_exit(void);
 void surface_os_desktop_print(const void *bytes, size_t length);
 /** @brief The PSRAM section holding the desktop's zero-initialized statics. */
 void surface_os_desktop_statics(void **base, size_t *bytes);
-/** @brief The desktop thread's interrupted program counter, read from its
- *  saved frame while the kernel runs; zero when the thread is blocked in a
- *  wait or has not started. */
-uintptr_t surface_os_desktop_sample(void);
+/** @brief Sample the desktop worker during a kernel dispatch. Returns the
+ *  count of saved and candidate code addresses in @p out, or zero. */
+size_t surface_os_desktop_sample(uintptr_t *out, size_t capacity, size_t scan_words);
 /** @brief Read and hash the named file on the desktop worker. */
 void surface_desktop_hash_file(const char *path);
 /** @brief Mount the SD card's native media volume without writing to it;
@@ -44,9 +43,6 @@ int surface_os_in_desktop(void);
 /** @brief Whether the desktop thread is blocked, in its wait or on a lock;
  *         callable from the kernel. */
 int surface_os_desktop_blocked(void);
-/** @brief The preempted desktop thread's program counter, return address
- *  and stack pointer from its saved frame; zero when it is not preempted. */
-int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp);
 /** @brief The kernel wall clock's standing: never set, set during this boot,
  *         or set before a restart and carried over it. */
 enum {

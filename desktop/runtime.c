@@ -150,32 +150,16 @@ static struct {
 /* Each stack sample: the program counter, the return address, then words
  * from the interrupted stack that fall in a code range, nearest first.
  * Words that are not return addresses are filtered on the host. */
-static uint32_t stack_samples[STACK_SAMPLES][STACK_DEPTH];
-
-/** @brief Whether @p w lies in SRAM or flash code. */
-static int code_word(uint32_t w)
-{
-    return (w >= 0x2f000000u && w < 0x2f040000u) || (w >= 0x40020000u && w < 0x40400000u);
-}
+static uintptr_t stack_samples[STACK_SAMPLES][STACK_DEPTH];
 
 /** @brief Record one stack sample of the preempted desktop thread. */
 static void stack_sample(void)
 {
-    uintptr_t pc, ra;
-    const uint32_t *sp, *top = rt.stack + STACK_BYTES / 4u;
-    uint32_t *out = stack_samples[rt.stacks_taken];
-    unsigned n = 2;
+    uintptr_t *out = stack_samples[rt.stacks_taken];
+    size_t n = surface_os_desktop_sample(out, STACK_DEPTH, STACK_SCAN);
 
-    if (!surface_os_desktop_context(&pc, &ra, &sp)) return;
-    out[0] = (uint32_t)pc;
-    out[1] = (uint32_t)ra;
-    if (sp >= rt.stack && sp < top) {
-        const uint32_t *end = top - sp > STACK_SCAN ? sp + STACK_SCAN : top;
-
-        for (; sp < end && n < STACK_DEPTH; sp++)
-            if (code_word(*sp)) out[n++] = *sp;
-    }
-    while (n < STACK_DEPTH) out[n++] = 0;
+    if (n == 0) return;
+    memset(out + n, 0, (STACK_DEPTH - n) * sizeof *out);
     if (++rt.stacks_taken == STACK_SAMPLES) {
         static const char head[] = "STACKS BEGIN\n";
 
@@ -1360,7 +1344,8 @@ int surface_runtime_poll(void)
     begin = surface_os_time();
     rt.turns++;
     {
-        uintptr_t pc = surface_os_desktop_sample();
+        uintptr_t pc = 0;
+        surface_os_desktop_sample(&pc, 1, 0);
 
         if (pc != 0u) {
             samples[rt.sample_head % SAMPLE_SLOTS] = (uint32_t)pc;

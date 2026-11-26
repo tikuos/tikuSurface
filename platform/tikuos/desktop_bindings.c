@@ -17,7 +17,6 @@
 #include <kernel/timers/tiku_clock.h>
 #include <kernel/vfs/tiku_vfs.h>
 #include <services/console/tiku_console.h>
-#include <arch/esp32s31/tiku_runtime_arch.h>
 #include <arch/esp32s31/tiku_psram_arch.h>
 #include <kernel/memory/tiku_mem.h>
 #include <malloc.h>
@@ -98,23 +97,9 @@ void surface_os_desktop_statics(void **base, size_t *bytes)
 void surface_os_desktop_lock(void) { tiku_atomic_enter(); }
 void surface_os_desktop_unlock(void) { tiku_atomic_exit(); }
 
-uintptr_t surface_os_desktop_sample(void)
+size_t surface_os_desktop_sample(uintptr_t *out, size_t capacity, size_t scan_words)
 {
-    /* The kernel is on the CPU, so a READY desktop thread was preempted and
-     * its saved frame holds the interrupted address. */
-    if (desktop_worker.state != TIKU_THREAD_READY || desktop_worker.sp == NULL) return 0;
-    return desktop_worker.sp[S31_FRAME_PC / 4u];
-}
-
-int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp)
-{
-    const uint32_t *f = desktop_worker.sp;
-
-    if (desktop_worker.state != TIKU_THREAD_READY || f == NULL) return 0;
-    *pc = f[S31_FRAME_PC / 4u];
-    *ra = f[1];
-    *sp = (const uint32_t *)(uintptr_t)f[2];
-    return 1;
+    return tiku_thread_sample(&desktop_worker, out, capacity, scan_words);
 }
 
 int surface_os_desktop_jobs_memory(void *memory, size_t bytes)
