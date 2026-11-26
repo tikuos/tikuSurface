@@ -601,11 +601,29 @@ static void tracker_copy(void)
 
 #endif
 
+static void client_permissions(void)
+{
+    void *queue = calloc(1, tiku_posix_media_queue_size());
+    assert(queue);
+    tiku_posix_media_queue_init(queue, 42, TIKU_MEDIA_READ);
+    tiku_posix_media_io_t io = {.operation = TIKU_POSIX_MEDIA_DELETE, .name = "unused"};
+    assert(tiku_posix_media_queue_submit(queue, &io) == TIKU_POSIX_MEDIA_DENIED);
+    assert(!store.count);
+    io.operation = TIKU_POSIX_MEDIA_ENUMERATE;
+    memset(io.name, 'a', sizeof io.name);
+    assert(tiku_posix_media_queue_submit(queue, &io) == TIKU_POSIX_MEDIA_INVALID);
+    assert(!store.count);
+    io.operation = TIKU_POSIX_MEDIA_SPACE;
+    assert(tiku_posix_media_queue_submit(queue, &io) == TIKU_POSIX_MEDIA_OK);
+    assert(tiku_posix_media_queue_poll(queue) && io.result == TIKU_POSIX_MEDIA_OK && io.offset);
+    free(queue);
+}
+
 int main(void)
 {
     disk = calloc(1,DISK_BYTES); assert(disk);
     block=(tiku_block_t){NULL,DISK_BYTES/512,read_disk,write_disk,sync_disk};
-    reset(); empty_catalog(); query_contract(); reset(); queue_contract(); cancel_behind(0); cancel_behind(1); reset(); epoch_contract();
+    reset(); client_permissions(); empty_catalog(); query_contract(); reset(); queue_contract(); cancel_behind(0); cancel_behind(1); reset(); epoch_contract();
     char name[64];
     for (unsigned i=0;i<4096;++i) { snprintf(name,sizeof name,"a/%04u",i); file(name); }
     for (unsigned i=0;i<40;++i) { snprintf(name,sizeof name,"f%04u",i); file(name); }

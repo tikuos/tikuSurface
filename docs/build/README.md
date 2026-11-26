@@ -18,6 +18,10 @@ foundation checkout, then runs product prose/comment checks and dependency tests
 New files must be staged for tracked-source checks. The hook verifies the
 foundation dependency and applies Stomme's commit-message and author rules.
 
+The native adapter tests link the media group from TikuOS. With the product checked out
+under TikuOS, the host suite finds it in the parent directory. For separate checkouts
+pass `TIKUOS_ROOT=/path/to/tikuOS` to `make test`, `make test-asan` and `make check`.
+
 Build and execute the product host suite:
 
 ```sh

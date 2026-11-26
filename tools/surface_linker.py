@@ -16,6 +16,7 @@ def generate(base, transfer=False):
     units = ('*surface-ui.o', '*tikuSurface/platform/tikuos/console_io.o', '*tikuSurface/platform/tikuos/device_io.o', '*tikuSurface/platform/tikuos/process_io.o', '*tikuSurface/platform/tikuos/vfs_io.o', '*tikuSurface/platform/tikuos/bindings.o',
              '*tikuSurface/platform/tikuos/diagnostics.o', '*tikuSurface/platform/tikuos/display.o',
              '*tikuSurface/platform/tikuos/services.o', '*tikuSurface/platform/tikuos/settings_io.o', '*tikuSurface/platform/tikuos/media_io.o',
+             '*compat/posix/tiku_posix_media.o', '*compat/posix/tiku_posix_media_io.o',
              '*services/storage/tiku_media_async.o', '*services/storage/tiku_media_mutation.o', '*services/storage/tiku_media_checkpoint.o', '*interfaces/bus/tiku_i2c_bus.o', '*arch/esp32s31/tiku_spi_arch.o',
              '*arch/esp32s31/tiku_sdcard_arch.o', '*arch/esp32s31/tiku_storage_async_io.o', '*arch/esp32s31/tiku_mfs_block_arch.o',
              '*tikuSurface/platform/tikuos/input.o', '*interfaces/input/tiku_touch_gt1151.o',

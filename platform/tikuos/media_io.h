@@ -5,44 +5,43 @@
  */
 #ifndef SURFACE_MEDIA_IO_H
 #define SURFACE_MEDIA_IO_H
-#ifndef SURFACE_DIRECTORIES
-#define SURFACE_DIRECTORIES 0
-#endif
-#include <stddef.h>
-#include <stdint.h>
-/** @brief Caller reservation for the queued read and mutation bridge; aligned to eight bytes. */
-#define SURFACE_MEDIA_BRIDGE_BYTES 16384u
-/** @brief Retained state slots for the firmware card owners. */
-#define SURFACE_MEDIA_READ_BYTES 6144u
-#define SURFACE_MEDIA_MUTATION_BYTES 8192u
-/** @brief Operations advance through the firmware's serialized storage queue.
- *  SPACE answers at once: offset is the volume's bytes, size a writer's.
- *  BEGIN starts stream name (its id comes back), RESUME takes stream id up,
- *  APPEND adds up to 64 KiB, SYNC commits, FINALIZE completes, RELEASE gives
- *  the writer up; DISCARD removes unfinished object id named name; RENAME_OVER
- *  moves id from name to destination over visible file offset (0: none). */
-enum { SURFACE_MEDIA_ENUMERATE, SURFACE_MEDIA_OPEN, SURFACE_MEDIA_READ, SURFACE_MEDIA_CLOSE,
-    SURFACE_MEDIA_RENAME, SURFACE_MEDIA_DELETE, SURFACE_MEDIA_REPLACE, SURFACE_MEDIA_MKDIR, SURFACE_MEDIA_TREE_RENAME, SURFACE_MEDIA_TREE_DELETE, SURFACE_MEDIA_DIRECTORY_UPGRADE, SURFACE_MEDIA_TREE_COPY,
-    SURFACE_MEDIA_SPACE, SURFACE_MEDIA_BEGIN, SURFACE_MEDIA_RESUME, SURFACE_MEDIA_APPEND, SURFACE_MEDIA_SYNC,
-    SURFACE_MEDIA_FINALIZE, SURFACE_MEDIA_RELEASE, SURFACE_MEDIA_DISCARD, SURFACE_MEDIA_RENAME_OVER };
-/** @brief Result codes copied without exposing filesystem types to SDK
- *  consumers; FULL is a volume without room for the change. */
-enum { SURFACE_MEDIA_OK, SURFACE_MEDIA_END, SURFACE_MEDIA_BUSY, SURFACE_MEDIA_STALE,
-    SURFACE_MEDIA_UNAVAILABLE, SURFACE_MEDIA_INVALID, SURFACE_MEDIA_UNSUPPORTED, SURFACE_MEDIA_LIMIT,
-    SURFACE_MEDIA_FULL };
-/** @brief One caller-owned operation retained until poll reports completion. */
-typedef struct {
-    unsigned operation, exclusive;
-#if SURFACE_DIRECTORIES
-    unsigned directory;
-    uint64_t prepared,total;
-#endif
-    char name[64], found[64], destination[64];
-    uint64_t epoch, rank, reader, offset, size, id;
-    unsigned char *bytes;
-    size_t length, count;
-    int result;
-} surface_media_io_t;
+#include <compat/posix/tiku_posix_media_io.h>
+
+typedef tiku_posix_media_io_t surface_media_io_t;
+#define SURFACE_MEDIA_BRIDGE_BYTES TIKU_POSIX_MEDIA_BRIDGE_BYTES
+#define SURFACE_MEDIA_READ_BYTES TIKU_POSIX_MEDIA_READ_BYTES
+#define SURFACE_MEDIA_MUTATION_BYTES TIKU_POSIX_MEDIA_MUTATION_BYTES
+#define SURFACE_MEDIA_ENUMERATE TIKU_POSIX_MEDIA_ENUMERATE
+#define SURFACE_MEDIA_OPEN TIKU_POSIX_MEDIA_OPEN
+#define SURFACE_MEDIA_READ TIKU_POSIX_MEDIA_READ
+#define SURFACE_MEDIA_CLOSE TIKU_POSIX_MEDIA_CLOSE
+#define SURFACE_MEDIA_RENAME TIKU_POSIX_MEDIA_RENAME
+#define SURFACE_MEDIA_DELETE TIKU_POSIX_MEDIA_DELETE
+#define SURFACE_MEDIA_REPLACE TIKU_POSIX_MEDIA_REPLACE
+#define SURFACE_MEDIA_MKDIR TIKU_POSIX_MEDIA_MKDIR
+#define SURFACE_MEDIA_TREE_RENAME TIKU_POSIX_MEDIA_TREE_RENAME
+#define SURFACE_MEDIA_TREE_DELETE TIKU_POSIX_MEDIA_TREE_DELETE
+#define SURFACE_MEDIA_DIRECTORY_UPGRADE TIKU_POSIX_MEDIA_DIRECTORY_UPGRADE
+#define SURFACE_MEDIA_TREE_COPY TIKU_POSIX_MEDIA_TREE_COPY
+#define SURFACE_MEDIA_SPACE TIKU_POSIX_MEDIA_SPACE
+#define SURFACE_MEDIA_BEGIN TIKU_POSIX_MEDIA_BEGIN
+#define SURFACE_MEDIA_RESUME TIKU_POSIX_MEDIA_RESUME
+#define SURFACE_MEDIA_APPEND TIKU_POSIX_MEDIA_APPEND
+#define SURFACE_MEDIA_SYNC TIKU_POSIX_MEDIA_SYNC
+#define SURFACE_MEDIA_FINALIZE TIKU_POSIX_MEDIA_FINALIZE
+#define SURFACE_MEDIA_RELEASE TIKU_POSIX_MEDIA_RELEASE
+#define SURFACE_MEDIA_DISCARD TIKU_POSIX_MEDIA_DISCARD
+#define SURFACE_MEDIA_RENAME_OVER TIKU_POSIX_MEDIA_RENAME_OVER
+#define SURFACE_MEDIA_OK TIKU_POSIX_MEDIA_OK
+#define SURFACE_MEDIA_END TIKU_POSIX_MEDIA_END
+#define SURFACE_MEDIA_BUSY TIKU_POSIX_MEDIA_BUSY
+#define SURFACE_MEDIA_STALE TIKU_POSIX_MEDIA_STALE
+#define SURFACE_MEDIA_UNAVAILABLE TIKU_POSIX_MEDIA_UNAVAILABLE
+#define SURFACE_MEDIA_INVALID TIKU_POSIX_MEDIA_INVALID
+#define SURFACE_MEDIA_UNSUPPORTED TIKU_POSIX_MEDIA_UNSUPPORTED
+#define SURFACE_MEDIA_LIMIT TIKU_POSIX_MEDIA_LIMIT
+#define SURFACE_MEDIA_FULL TIKU_POSIX_MEDIA_FULL
+
 /** @brief Size of the firmware queue bridge, stored in the product's PSRAM pool. */
 size_t surface_os_media_size(void);
 /** @brief Initialize caller storage without mounting or writing media. */

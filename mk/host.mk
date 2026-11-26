@@ -1,6 +1,10 @@
 # Authors: Ambuj Varshney <ambuj@tiku-os.org>
 # SPDX-License-Identifier: Apache-2.0
 CC ?= cc
+TIKUOS_ROOT ?= ..
+MEDIA_INCLUDES := -idirafter $(TIKUOS_ROOT) -I$(TIKUOS_ROOT)/compat/posix
+MEDIA_CLIENT := $(TIKUOS_ROOT)/compat/posix/tiku_posix_media.c
+MEDIA_HEADERS := $(TIKUOS_ROOT)/compat/posix/tiku_posix_media.h $(TIKUOS_ROOT)/compat/posix/tiku_posix_media_io.h
 BUILD ?= build/host
 SDK_ROOT ?= $(CURDIR)/foundation/build/surface-host/sdk
 FOUNDATION_TARGET := host-test
@@ -213,7 +217,7 @@ SDK_REQUIRED_CAPABILITIES += text-field-events word-checksum-input
 endif
 include $(SDK_ROOT)/sdk.mk
 CFLAGS ?= -O2 -g
-FLAGS := -DSURFACE_DESKTOP=$(SURFACE_DESKTOP) -DSURFACE_IMAGE=$(SURFACE_IMAGE) -DSURFACE_EDITOR_LINES=$(SURFACE_EDITOR_LINES) -DSURFACE_EDITOR_DOCUMENTS=$(SURFACE_EDITOR_DOCUMENTS) -DSURFACE_NOTES=$(SURFACE_NOTES) -DSURFACE_DIFF=$(SURFACE_DIFF) -DSURFACE_DIRECTORIES=$(SURFACE_DIRECTORIES) -DSURFACE_PREFERENCES=$(SURFACE_PREFERENCES) -DSURFACE_DOCUMENTS=$(SURFACE_DOCUMENTS) -DSURFACE_HEX=$(SURFACE_HEX) -DSURFACE_READER=$(SURFACE_READER) -DSURFACE_VFS=$(SURFACE_VFS) -DSURFACE_DEVICE=$(SURFACE_DEVICE) -DSURFACE_BASIC=$(SURFACE_BASIC) -DSURFACE_FILE_INFO=$(SURFACE_FILE_INFO) -DSURFACE_TERMINAL=$(SURFACE_TERMINAL) -DSURFACE_EDITOR=$(SURFACE_EDITOR) -DSURFACE_CONTENT_JOBS=$(SURFACE_CONTENT_JOBS) -DSURFACE_ARITHMETIC=$(SURFACE_ARITHMETIC) -DSURFACE_FILE_JOBS=$(SURFACE_FILE_JOBS) -DSURFACE_TEXT_INPUT=$(SURFACE_TEXT_INPUT) $(SDK_CFLAGS) -Ishell -Iplatform/host -Wall -Wextra -Werror -Wno-unused-parameter $(CFLAGS)
+FLAGS := $(MEDIA_INCLUDES) -DSURFACE_DESKTOP=$(SURFACE_DESKTOP) -DSURFACE_IMAGE=$(SURFACE_IMAGE) -DSURFACE_EDITOR_LINES=$(SURFACE_EDITOR_LINES) -DSURFACE_EDITOR_DOCUMENTS=$(SURFACE_EDITOR_DOCUMENTS) -DSURFACE_NOTES=$(SURFACE_NOTES) -DSURFACE_DIFF=$(SURFACE_DIFF) -DSURFACE_DIRECTORIES=$(SURFACE_DIRECTORIES) -DSURFACE_PREFERENCES=$(SURFACE_PREFERENCES) -DSURFACE_DOCUMENTS=$(SURFACE_DOCUMENTS) -DSURFACE_HEX=$(SURFACE_HEX) -DSURFACE_READER=$(SURFACE_READER) -DSURFACE_VFS=$(SURFACE_VFS) -DSURFACE_DEVICE=$(SURFACE_DEVICE) -DSURFACE_BASIC=$(SURFACE_BASIC) -DSURFACE_FILE_INFO=$(SURFACE_FILE_INFO) -DSURFACE_TERMINAL=$(SURFACE_TERMINAL) -DSURFACE_EDITOR=$(SURFACE_EDITOR) -DSURFACE_CONTENT_JOBS=$(SURFACE_CONTENT_JOBS) -DSURFACE_ARITHMETIC=$(SURFACE_ARITHMETIC) -DSURFACE_FILE_JOBS=$(SURFACE_FILE_JOBS) -DSURFACE_TEXT_INPUT=$(SURFACE_TEXT_INPUT) $(SDK_CFLAGS) -Ishell -Iplatform/host -Wall -Wextra -Werror -Wno-unused-parameter $(CFLAGS)
 ifeq ($(SURFACE_DEVICE),1)
 DEVICE_APP := apps/device.c
 endif
@@ -307,33 +311,33 @@ $(BUILD)/test-gesture: tests/test_gesture.c desktop/gesture.c desktop/gesture.h 
 # neither, so those two warnings are off here.
 # The host compiler fortifies at -O1, and a fortified call such as pread()
 # reaches the C library by its symbol, past rename.h; fortification is off.
-POSIX_LAYER_BASE := -std=gnu11 -Wall -Wextra -Werror -Wno-format-truncation -Wno-unused-result \
+POSIX_LAYER_BASE := $(MEDIA_INCLUDES) -std=gnu11 -Wall -Wextra -Werror -Wno-format-truncation -Wno-unused-result \
     -Wno-nonnull-compare -O1 -g -U_FORTIFY_SOURCE -fno-omit-frame-pointer \
     -include tests/posix_host/rename.h \
     -Itests/posix_host -Idesktop -Idesktop/compat -I$(SDK_ROOT)/include -Ifoundation/kits/support
 POSIX_LAYER_FLAGS := $(POSIX_LAYER_BASE) -fsanitize=address,undefined
-$(BUILD)/test-posix-layer: tests/test_posix_layer.c desktop/posix.c desktop/bridge.h desktop/bridge_os.h \
+$(BUILD)/test-posix-layer: tests/test_posix_layer.c desktop/posix.c $(MEDIA_CLIENT) $(MEDIA_HEADERS) desktop/bridge.h desktop/bridge_os.h \
     $(wildcard tests/posix_host/*.h) mk/host.mk | $(BUILD)
-	$(CC) $(POSIX_LAYER_FLAGS) tests/test_posix_layer.c desktop/posix.c -o $@
+	$(CC) $(POSIX_LAYER_FLAGS) tests/test_posix_layer.c desktop/posix.c $(MEDIA_CLIENT) -o $@
 # The board's namespace as a Tracker device over a fake kernel namespace;
 # Stomme's model header comes from the pinned foundation.
 $(BUILD)/test-board: tests/test_board.c desktop/board.c desktop/board.h tests/posix_host/tiku_posix.h \
     mk/host.mk | $(BUILD)
-	$(CC) -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread -fsanitize=address,undefined \
+	$(CC) $(MEDIA_INCLUDES) -std=gnu11 -Wall -Wextra -Werror -O1 -g -pthread -fsanitize=address,undefined \
 	    -Itests/posix_host -Idesktop -Ifoundation/kits/storage tests/test_board.c desktop/board.c -o $@
 # Camera's window over a fake kernel bridge and job runner, drawn with the
 # SDK's interface kit; the kits it uses beyond the SDK come from the pinned
 # foundation.
 $(BUILD)/test-camera: tests/test_camera.c desktop/camera.c desktop/camera.h desktop/bridge.h \
     platform/tikuos/camera.h $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
-	$(CC) $(SDK_CFLAGS) -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+	$(CC) $(MEDIA_INCLUDES) $(SDK_CFLAGS) -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
 	    -Idesktop $(addprefix -Ifoundation/kits/,support storage interface) \
 	    tests/test_camera.c $(SDK_LIBRARIES) -lm -o $@
 # The system facts the desktop's kits ask of TikuOS, over fake kernel nodes;
 # the kits' headers come from the pinned foundation.
 $(BUILD)/test-sys: tests/test_sys.c desktop/sys.c desktop/bridge.h desktop/bridge_os.h \
     tests/posix_host/tiku_posix.h mk/host.mk | $(BUILD)
-	$(CC) -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
+	$(CC) $(MEDIA_INCLUDES) -std=gnu11 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
 	    -Itests/posix_host -Idesktop $(addprefix -Ifoundation/kits/,support interface device storage) \
 	    tests/test_sys.c desktop/sys.c -o $@
 # The layer from several threads: once under the thread sanitizer, run
@@ -342,12 +346,12 @@ $(BUILD)/test-sys: tests/test_sys.c desktop/sys.c desktop/bridge.h desktop/bridg
 # the kept card bytes.
 HOST_MACHINE := $(shell uname -m)
 POSIX_THREADS_FLAGS := $(POSIX_LAYER_BASE) -pthread
-$(BUILD)/test-posix-threads-tsan $(BUILD)/test-posix-threads-asan: tests/test_posix_threads.c desktop/posix.c \
+$(BUILD)/test-posix-threads-tsan $(BUILD)/test-posix-threads-asan: tests/test_posix_threads.c desktop/posix.c $(MEDIA_CLIENT) $(MEDIA_HEADERS) \
     desktop/bridge.h desktop/bridge_os.h $(wildcard tests/posix_host/*.h) mk/host.mk | $(BUILD)
 $(BUILD)/test-posix-threads-tsan:
-	$(CC) $(POSIX_THREADS_FLAGS) -fsanitize=thread tests/test_posix_threads.c desktop/posix.c -o $@
+	$(CC) $(POSIX_THREADS_FLAGS) -fsanitize=thread tests/test_posix_threads.c desktop/posix.c $(MEDIA_CLIENT) -o $@
 $(BUILD)/test-posix-threads-asan:
-	$(CC) $(POSIX_THREADS_FLAGS) -fsanitize=address,undefined tests/test_posix_threads.c desktop/posix.c -o $@
+	$(CC) $(POSIX_THREADS_FLAGS) -fsanitize=address,undefined tests/test_posix_threads.c desktop/posix.c $(MEDIA_CLIENT) -o $@
 
 $(BUILD)/test-settings: tests/test_settings.c $(PRODUCT) $(HOST) $(HEADERS) shell/settings.h | $(BUILD)
 	$(CC) $(FLAGS) tests/test_settings.c $(PRODUCT) $(HOST) $(SDK_LIBRARIES) -o $@

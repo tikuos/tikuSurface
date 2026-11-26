@@ -5,14 +5,14 @@
  * Files live in a tree held in the desktop's PSRAM heap: the desktop's home,
  * its settings and the /proc files the volume kit reads.  newlib's file
  * calls reach this tree through the system calls defined here, which take
- * precedence over libnosys.  The desktop is the only thread that calls
- * these functions; the C library's heap grows inside the arena the runtime
- * hands over, under the interrupt-masked allocator lock.
+ * precedence over libnosys.  The desktop and its job worker share the file tree
+ * under a lock. The C library grows its heap inside the runtime arena.
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "bridge.h"
 #include "tiku_crypto.h"
 #include "tiku_posix.h"
+#include "tiku_posix_media.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -84,16 +84,13 @@ int tiku_posix_mutations(uint64_t *count)
  * changed node's parent, or the root for the root.  A reader keeps its own
  * place in this ring (tiku_posix_changes()), so a view re-lists only when
  * its own folder, or one above it, changed. */
-#define CHANGE_RING 64u
-static uint64_t change_dirs[CHANGE_RING];
-static uint64_t change_total;
+static tiku_posix_media_changes_t change_log;
 
 static void change_in(const rnode_t *n)
 {
     const rnode_t *dir = n->parent != NULL ? n->parent : n;
 
-    change_dirs[change_total % CHANGE_RING] = dir->ino;
-    change_total++;
+    tiku_posix_media_changed(&change_log, dir->ino);
 }
 
 static void enter(void);
@@ -102,18 +99,9 @@ static unsigned card_observe(void);
 
 int tiku_posix_changes(uint64_t *next, uint64_t *dirs, int max, int *complete)
 {
-    int n = 0;
-
     enter();
     (void)card_observe();
-    *complete = 1;
-    if (*next == UINT64_MAX) {
-        *next = change_total;
-    } else if (change_total - *next > CHANGE_RING) {
-        *next = change_total - CHANGE_RING;
-        *complete = 0;
-    }
-    while (*next < change_total && n < max) dirs[n++] = change_dirs[(*next)++ % CHANGE_RING];
+    int n = tiku_posix_media_changes(&change_log, next, dirs, max, complete);
     leave();
     return n;
 }
@@ -414,16 +402,15 @@ static rnode_t *child_named(rnode_t *dir, const char *name, size_t len)
  * at fsync() or close(), one atomic replacement of at most CARD_WRITE_MAX
  * bytes; a larger one streams (LARGE FILES below).  A folder made here keeps
  * a hidden empty object, CARD_FOLDER, so it is still there after a restart. */
-#define CARD_NAME 64u                 /* bytes of a media name, NUL included */
-#define CARD_READ 65536u              /* bytes one read request returns at most */
+#define CARD_NAME TIKU_POSIX_MEDIA_NAME
 #define CARD_HEAD 1024u               /* first bytes a file keeps once read */
 #define CARD_ENTRIES 4096u            /* enumeration steps one listing takes */
 #define CARD_UNLISTED 0               /* a directory's entries are not read */
 #define CARD_LISTING 1                /* a thread is reading them */
 #define CARD_LISTED 2                 /* they are in the tree */
-#define CARD_WRITE_MAX 65536u         /* bytes of the largest file published */
-#define CARD_FOLDER ".folder"         /* a folder's hidden placeholder object */
-#define CARD_FOLDER_LEN 7u
+#define CARD_WRITE_MAX TIKU_POSIX_MEDIA_CHUNK
+#define CARD_FOLDER TIKU_POSIX_MEDIA_FOLDER
+#define CARD_FOLDER_LEN (sizeof CARD_FOLDER - 1u)
 #define CARD_TRASH ".Trash"           /* a Trash folder, as Stomme names it */
 #define CARD_ORIGINS ".origins"       /* a card Trash's record of where its items came from */
 #define CARD_ORIGINS_LEN 8u
@@ -528,8 +515,9 @@ static void card_wait_end(void)
 
 /** @brief Run one card request, with the layer's holds given back while the
  *  owner runs it. */
-static void card_request(surface_media_io_t *io)
+static void card_request(void *context, tiku_posix_media_io_t *io)
 {
+    (void)context;
     unsigned held;
 
     card_waiting++;
@@ -539,10 +527,11 @@ static void card_request(surface_media_io_t *io)
     card_wait_end();
 }
 
+static const tiku_posix_media_t volume = {card_request, NULL};
+
 static int card_is_trash(const rnode_t *dir);
 static void card_origins_load(rnode_t *dir);
 static void card_origins_save(rnode_t *dir);
-static int card_errno(int result);
 static void card_remove_node(rnode_t *n);
 
 typedef struct card_entry {
@@ -557,58 +546,35 @@ typedef struct card_entry {
 static int card_entries(const char *prefix, int trash, card_entry_t **entries,
                         uint64_t *folder, uint64_t *origins)
 {
-    surface_media_io_t io = {0};
+    tiku_posix_media_dir_t dir;
     size_t n = strlen(prefix);
-
-    memcpy(io.name, prefix, n + 1u);
+    if (tiku_posix_media_opendir(&dir, prefix) < 0) return errno;
     for (unsigned step = 0; step < CARD_ENTRIES; step++) {
-        io.operation = SURFACE_MEDIA_ENUMERATE;
-        card_request(&io);
-        if (io.result == SURFACE_MEDIA_END) return 0;
-        if (io.result != SURFACE_MEDIA_OK) return card_errno(io.result);
-        io.found[CARD_NAME - 1u] = '\0';
-        if (strncmp(io.found, prefix, n) != 0) return 0;
-        const char *leaf = io.found + n;
-        char *slash = strchr(io.found + n, '/');
-        size_t len = slash ? (size_t)(slash - io.found) : strlen(io.found);
-        int visible = 1;
-
-        if (slash != NULL) {
-            if (len == n || len + 2u > CARD_NAME) return EIO;
-            visible = n != 0 || len != sizeof SURFACE_HOME_CARD - 1u ||
-                      memcmp(leaf, SURFACE_HOME_CARD, len) != 0;
-            memcpy(io.name, io.found, len);
-            io.name[len] = '0';  /* The next key beyond this prefix and '/'. */
-            io.name[len + 1u] = '\0';
-            io.exclusive = 0;
-        } else {
-            if (strcmp(leaf, CARD_FOLDER) == 0) {
-                *folder = io.id;
-                visible = 0;
-            } else if (trash && strcmp(leaf, CARD_ORIGINS) == 0) {
-                *origins = io.id;
-                visible = 0;
-            } else if (n == 0 && strlen(leaf) > CARD_STREAM_LEN &&
-                       memcmp(leaf, CARD_STREAM, CARD_STREAM_LEN) == 0) {
-                visible = 0;
-            }
-            memcpy(io.name, io.found, len + 1u);
-            io.exclusive = 1;
+        tiku_posix_media_entry_t item;
+        int result = tiku_posix_media_readdir(&volume, &dir, &item);
+        if (result < 0) return errno;
+        if (!result) {
+            *folder = dir.marker;
+            return 0;
         }
-        if (visible && len > n) {
-            card_entry_t *e = calloc(1, sizeof *e);
-
-            if (e == NULL) return ENOMEM;
-            memcpy(e->path, io.found, len);
-            e->path[len] = '\0';
-            e->mode = slash ? S_IFDIR | 0755 : S_IFREG | 0644;
-            e->id = slash ? 0 : io.id;
-            e->rank = io.rank;
-            e->epoch = io.epoch;
-            e->size = slash ? 0 : io.size;
-            e->next = *entries;
-            *entries = e;
+        const char *leaf = item.name + n;
+        if (!n && item.directory && !strcmp(leaf, SURFACE_HOME_CARD)) continue;
+        if (!n && !item.directory && !strncmp(leaf, CARD_STREAM, CARD_STREAM_LEN) &&
+            leaf[CARD_STREAM_LEN]) continue;
+        if (trash && !item.directory && !strcmp(leaf, CARD_ORIGINS)) {
+            *origins = item.id;
+            continue;
         }
+        card_entry_t *e = calloc(1, sizeof *e);
+        if (!e) return ENOMEM;
+        memcpy(e->path, item.name, sizeof e->path);
+        e->mode = item.directory ? S_IFDIR | 0755 : S_IFREG | 0644;
+        e->id = item.id;
+        e->rank = item.rank;
+        e->epoch = item.epoch;
+        e->size = item.size;
+        e->next = *entries;
+        *entries = e;
     }
     return EOVERFLOW;
 }
@@ -752,42 +718,18 @@ static const char *under(const char *path, const char *mount, char full[PATH_MAX
     return path;
 }
 
-/** @brief The errno for a card request's result. */
-static int card_errno(int result)
-{
-    switch (result) {
-    case SURFACE_MEDIA_BUSY: return EBUSY;
-    case SURFACE_MEDIA_STALE: return ESTALE;
-    case SURFACE_MEDIA_INVALID: return EINVAL;
-    case SURFACE_MEDIA_UNSUPPORTED: return ENOTSUP;
-    case SURFACE_MEDIA_LIMIT: return ENFILE;
-    case SURFACE_MEDIA_FULL: return ENOSPC;
-    case SURFACE_MEDIA_END: return ENOENT;
-    default: return EIO;
-    }
-}
-
 /** @brief Find file @p n on the card again by its name, after a change made
  *  its place in the listing stale.  0, or -1 with ENOENT or the request's
  *  errno. */
 static int card_locate(rnode_t *n)
 {
-    surface_media_io_t io;
-
-    memset(&io, 0, sizeof io);
-    io.operation = SURFACE_MEDIA_ENUMERATE;
-    memcpy(io.name, n->card->name, CARD_NAME);
-    card_request(&io);
-    if (io.result != SURFACE_MEDIA_OK || strncmp(io.found, n->card->name, CARD_NAME) != 0) {
-        errno = io.result == SURFACE_MEDIA_OK || io.result == SURFACE_MEDIA_END ? ENOENT :
-                card_errno(io.result);
-        return -1;
-    }
-    n->card->epoch = io.epoch;
-    n->card->rank = io.rank;
-    n->card->id = io.id;
-    n->card->stored = (size_t)io.size;
-    if (!n->card->staged) n->size = (size_t)io.size;
+    tiku_posix_media_entry_t entry;
+    if (tiku_posix_media_stat(&volume, n->card->name, &entry) < 0) return -1;
+    n->card->epoch = entry.epoch;
+    n->card->rank = entry.rank;
+    n->card->id = entry.id;
+    n->card->stored = (size_t)entry.size;
+    if (!n->card->staged) n->size = (size_t)entry.size;
     return 0;
 }
 
@@ -795,60 +737,18 @@ static int card_locate(rnode_t *n)
  *  to the card has moved it; the reader id, or 0. */
 static uint64_t card_open(rnode_t *n)
 {
-    for (int pass = 0; pass < 2; pass++) {
-        surface_media_io_t io;
-
-        memset(&io, 0, sizeof io);
-        io.operation = SURFACE_MEDIA_OPEN;
-        memcpy(io.name, n->card->name, CARD_NAME);
-        io.epoch = n->card->epoch;
-        io.rank = n->card->rank;
-        if (io.epoch != 0) {
-            card_request(&io);
-            if (io.result == SURFACE_MEDIA_OK) return io.reader;
-            if (io.result != SURFACE_MEDIA_STALE) return 0;
-        }
-        if (pass == 1 || card_locate(n) != 0) return 0;
+    tiku_posix_media_entry_t entry = {.epoch = n->card->epoch, .rank = n->card->rank,
+                                      .id = n->card->id, .size = n->card->stored};
+    memcpy(entry.name, n->card->name, sizeof entry.name);
+    uint64_t reader = tiku_posix_media_open(&volume, &entry);
+    if (reader && entry.epoch != n->card->epoch) {
+        n->card->epoch = entry.epoch;
+        n->card->rank = entry.rank;
+        n->card->id = entry.id;
+        n->card->stored = (size_t)entry.size;
+        if (!n->card->staged) n->size = (size_t)entry.size;
     }
-    return 0;
-}
-
-/** @brief Close a card reader. */
-static void card_close(uint64_t reader)
-{
-    surface_media_io_t io;
-
-    memset(&io, 0, sizeof io);
-    io.operation = SURFACE_MEDIA_CLOSE;
-    io.reader = reader;
-    card_request(&io);
-}
-
-/** @brief Read up to @p n bytes at @p at; the bytes read, or -1. */
-static _ssize_t card_read(uint64_t reader, unsigned char *buf, size_t n, off_t at)
-{
-    size_t done = 0;
-
-    while (done < n) {
-        surface_media_io_t io;
-        size_t want = n - done > CARD_READ ? CARD_READ : n - done;
-
-        memset(&io, 0, sizeof io);
-        io.operation = SURFACE_MEDIA_READ;
-        io.reader = reader;
-        io.offset = (uint64_t)at + done;
-        io.bytes = buf + done;
-        io.length = want;
-        card_request(&io);
-        if (io.result != SURFACE_MEDIA_OK) {
-            if (done) break;
-            errno = EIO;
-            return -1;
-        }
-        done += io.count;
-        if (io.count < want) break;
-    }
-    return (_ssize_t)done;
+    return reader;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -940,7 +840,6 @@ static void card_folder_name(const rnode_t *dir, char out[CARD_NAME])
  *  change while the owner writes them. */
 static uint64_t card_replace(const char *name, uint64_t id, const unsigned char *bytes, size_t len)
 {
-    surface_media_io_t io;
     unsigned char *copy = NULL;
 
     if (len > CARD_WRITE_MAX) {
@@ -955,40 +854,20 @@ static uint64_t card_replace(const char *name, uint64_t id, const unsigned char 
         }
         memcpy(copy, bytes, len);
     }
-    memset(&io, 0, sizeof io);
-    io.operation = SURFACE_MEDIA_REPLACE;
-    snprintf(io.name, sizeof io.name, "%s", name);
-    io.id = id;
-    io.bytes = copy;
-    io.length = len;
-    card_request(&io);
+    uint64_t published = tiku_posix_media_replace(&volume, name, id, copy, len);
     free(copy);
     card_space_known = 0;
-    if (io.result != SURFACE_MEDIA_OK) {
-        errno = card_errno(io.result);
-        return 0;
-    }
-    return io.id;
+    return published;
 }
 
 /** @brief Remove card object @p id named @p name, or rename it to @p to.
  *  0, or -1 with errno set. */
 static int card_move(uint64_t id, const char *name, const char *to)
 {
-    surface_media_io_t io;
-
-    memset(&io, 0, sizeof io);
-    io.operation = to != NULL ? SURFACE_MEDIA_RENAME : SURFACE_MEDIA_DELETE;
-    snprintf(io.name, sizeof io.name, "%s", name);
-    if (to != NULL) snprintf(io.destination, sizeof io.destination, "%s", to);
-    io.id = id;
-    card_request(&io);
+    int result = to ? tiku_posix_media_rename(&volume, name, id, to, NULL) :
+                      tiku_posix_media_unlink(&volume, name, id);
     card_space_known = 0;
-    if (io.result != SURFACE_MEDIA_OK) {
-        errno = card_errno(io.result);
-        return -1;
-    }
-    return 0;
+    return result;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -1004,60 +883,19 @@ static int card_move(uint64_t id, const char *name, const char *to)
 static unsigned card_streams;     /* hidden objects named since the start */
 static int card_swept;            /* an earlier start's hidden objects are gone */
 
-/** @brief Run stream operation @p op on file @p n's hidden object, with
- *  @p len bytes at @p bytes for an append.  0, or -1 with errno set. */
-static int card_stream_op(rnode_t *n, unsigned op, const unsigned char *bytes, size_t len)
-{
-    surface_media_io_t io;
-
-    memset(&io, 0, sizeof io);
-    io.operation = op;
-    memcpy(io.name, n->card->stream_name, sizeof n->card->stream_name);
-    io.id = n->card->stream;
-    io.bytes = (unsigned char *)bytes;
-    io.length = len;
-    card_request(&io);
-    card_space_known = 0;
-    if (io.result != SURFACE_MEDIA_OK) {
-        errno = card_errno(io.result);
-        return -1;
-    }
-    if (op == SURFACE_MEDIA_BEGIN) n->card->stream = io.id;
-    return 0;
-}
-
-/** @brief Remove card object @p id named @p name, unfinished or complete. */
-static void card_stream_remove(uint64_t id, const char *name)
-{
-    surface_media_io_t io;
-
-    memset(&io, 0, sizeof io);
-    io.operation = SURFACE_MEDIA_DISCARD;
-    snprintf(io.name, sizeof io.name, "%s", name);
-    io.id = id;
-    card_request(&io);
-    if (io.result == SURFACE_MEDIA_STALE) (void)card_move(id, name, NULL);
-}
-
 /** @brief Remove the hidden objects an earlier start left on the card. */
 static void card_stream_sweep(void)
 {
-    char from[CARD_NAME];
-    unsigned exclusive = 0;
+    char from[CARD_NAME] = CARD_STREAM;
+    int exclusive = 0;
+    tiku_posix_media_entry_t entry;
 
-    memcpy(from, CARD_STREAM, CARD_STREAM_LEN + 1u);
-    for (;;) {
-        surface_media_io_t io;
-
-        memset(&io, 0, sizeof io);
-        io.operation = SURFACE_MEDIA_ENUMERATE;
-        memcpy(io.name, from, CARD_NAME);
-        io.exclusive = exclusive;
-        card_request(&io);
-        if (io.result != SURFACE_MEDIA_OK || strncmp(io.found, CARD_STREAM, CARD_STREAM_LEN) != 0) break;
-        if (strspn(io.found + CARD_STREAM_LEN, "0123456789") == strlen(io.found + CARD_STREAM_LEN))
-            card_stream_remove(io.id, io.found);
-        memcpy(from, io.found, CARD_NAME);
+    while (tiku_posix_media_seek(&volume, from, exclusive, &entry) == 0 &&
+           strncmp(entry.name, CARD_STREAM, CARD_STREAM_LEN) == 0) {
+        const char *suffix = entry.name + CARD_STREAM_LEN;
+        if (*suffix && strspn(suffix, "0123456789") == strlen(suffix))
+            (void)tiku_posix_media_discard(&volume, entry.name, entry.id);
+        memcpy(from, entry.name, sizeof from);
         exclusive = 1;
     }
 }
@@ -1070,7 +908,7 @@ static int card_stream_flush(rnode_t *n, int final)
     card_node_t *c = n->card;
     size_t len = n->size - c->streamed;
     unsigned char *copy = NULL;
-    int r, held;
+    int r;
 
     if (len != 0u) {
         copy = malloc(len);
@@ -1086,21 +924,10 @@ static int card_stream_flush(rnode_t *n, int final)
             card_swept = 1;
         }
         snprintf(c->stream_name, sizeof c->stream_name, CARD_STREAM "%u", ++card_streams);
-        r = card_stream_op(n, SURFACE_MEDIA_BEGIN, NULL, 0);
-    } else {
-        r = card_stream_op(n, SURFACE_MEDIA_RESUME, NULL, 0);
     }
-    held = r == 0;
     c->flushing = 1;
-    if (r == 0 && len != 0u) r = card_stream_op(n, SURFACE_MEDIA_APPEND, copy, len);
-    if (r == 0) r = card_stream_op(n, final ? SURFACE_MEDIA_FINALIZE : SURFACE_MEDIA_SYNC, NULL, 0);
-    if (r == 0 && final) held = 0;  /* completion gives the writer back */
-    if (held) {
-        int e = errno, k = card_stream_op(n, SURFACE_MEDIA_RELEASE, NULL, 0);
-
-        if (r == 0) r = k;
-        else errno = e;
-    }
+    r = tiku_posix_media_flush(&volume, c->stream_name, &c->stream, copy, len, final);
+    card_space_known = 0;
     free(copy);
     c->flushing = 0;
     if (r == 0) c->streamed += len;
@@ -1114,7 +941,7 @@ static void card_stream_drop(rnode_t *n)
     card_node_t *c = n->card;
     int e = errno;
 
-    if (c->stream != 0) card_stream_remove(c->stream, c->stream_name);
+    if (c->stream != 0) (void)tiku_posix_media_discard(&volume, c->stream_name, c->stream);
     c->stream = 0;
     c->streaming = 0;
     c->streamed = 0;
@@ -1127,21 +954,11 @@ static void card_stream_drop(rnode_t *n)
 static int card_stream_publish(rnode_t *n)
 {
     card_node_t *c = n->card;
-    surface_media_io_t io;
 
     if (card_stream_flush(n, 1) != 0) return -1;
-    memset(&io, 0, sizeof io);
-    io.operation = SURFACE_MEDIA_RENAME_OVER;
-    memcpy(io.name, c->stream_name, sizeof c->stream_name);
-    snprintf(io.destination, sizeof io.destination, "%s", c->name);
-    io.id = c->stream;
-    io.offset = c->id;
-    card_request(&io);
+    int result = tiku_posix_media_rename(&volume, c->stream_name, c->stream, c->name, &c->id);
     card_space_known = 0;
-    if (io.result != SURFACE_MEDIA_OK) {
-        errno = card_errno(io.result);
-        return -1;
-    }
+    if (result < 0) return -1;
     c->id = c->stream;
     c->stream = 0;
     c->streaming = 0;
@@ -1177,8 +994,8 @@ static int card_stage(rnode_t *n)
             errno = EIO;
             return -1;
         }
-        got = card_read(reader, n->data, size, 0);
-        card_close(reader);
+        got = tiku_posix_media_pread(&volume, reader, n->data, size, 0);
+        tiku_posix_media_close(&volume, reader);
         if (got != (_ssize_t)size) {
             errno = EIO;
             return -1;
@@ -1381,7 +1198,7 @@ static void fill_stat(const rnode_t *n, struct stat *st)
     st->st_nlink = S_ISDIR(n->mode) ? 2 : 1;
     st->st_size = (off_t)n->size;
     /* newlib sizes a stream's buffer by it: one card read request apiece. */
-    st->st_blksize = n->card != NULL && S_ISREG(n->mode) ? CARD_READ : 512;
+    st->st_blksize = n->card != NULL && S_ISREG(n->mode) ? TIKU_POSIX_MEDIA_CHUNK : 512;
     st->st_blocks = (blkcnt_t)((n->size + 511u) / 512u);
     st->st_mtim.tv_sec = n->mtime;
     st->st_atim.tv_sec = n->mtime;
@@ -2208,7 +2025,7 @@ static int _close_locked(int fd)
          * descriptor waits, then finds it closed. */
         f->reader = 0;
         f->busy = 1;
-        card_close(reader);
+        tiku_posix_media_close(&volume, reader);
         f->busy = 0;
         announce_change();
     }
@@ -2288,7 +2105,7 @@ static _ssize_t card_file_read(fd_t *f, unsigned gen, unsigned char *buf, size_t
         }
         head = malloc(want ? want : 1u);
         if (head != NULL) {
-            _ssize_t k = card_read(f->reader, head, want, 0);
+            _ssize_t k = tiku_posix_media_pread(&volume, f->reader, head, want, 0);
 
             if (k < 0) {
                 free(head);
@@ -2315,7 +2132,7 @@ static _ssize_t card_file_read(fd_t *f, unsigned gen, unsigned char *buf, size_t
         errno = EIO;
         goto done;
     }
-    got = card_read(f->reader, buf, n, pos);
+    got = tiku_posix_media_pread(&volume, f->reader, buf, n, pos);
 done:
     if (got > 0 && move) f->pos = pos + got;
     f->busy = 0;
@@ -2773,20 +2590,10 @@ static int card_rename_file(rnode_t *from, rnode_t *to, rnode_t *parent, const c
         if (from->size > CARD_WRITE_MAX && from->card->id != 0) {
             /* Too large to publish whole: the file takes the target's name in
              * one transaction that also removes the target's version. */
-            surface_media_io_t io;
-
-            memset(&io, 0, sizeof io);
-            io.operation = SURFACE_MEDIA_RENAME_OVER;
-            snprintf(io.name, sizeof io.name, "%s", from->card->name);
-            snprintf(io.destination, sizeof io.destination, "%s", name);
-            io.id = from->card->id;
-            io.offset = to->card->id;
-            card_request(&io);
+            int result = tiku_posix_media_rename(&volume, from->card->name, from->card->id,
+                                                name, &to->card->id);
             card_space_known = 0;
-            if (io.result != SURFACE_MEDIA_OK) {
-                errno = card_errno(io.result);
-                return -1;
-            }
+            if (result < 0) return -1;
             card_remove_node(to);
             to = NULL;
             moved = 1;
@@ -3005,24 +2812,17 @@ static int card_origins_name(const rnode_t *dir, char out[CARD_NAME])
  *  @p len bytes; 0, or -1 when it is not there or above CARD_WRITE_MAX. */
 static int card_get_object(const char *name, unsigned char **out, size_t *len)
 {
-    surface_media_io_t io;
-    uint64_t size, reader;
+    tiku_posix_media_entry_t entry;
+    if (tiku_posix_media_stat(&volume, name, &entry) < 0 || entry.size > CARD_WRITE_MAX) return -1;
+    uint64_t reader = tiku_posix_media_open(&volume, &entry);
+    if (!reader) return -1;
+    uint64_t size = entry.size;
+    if (size > CARD_WRITE_MAX) { (void)tiku_posix_media_close(&volume, reader); return -1; }
     unsigned char *buf;
     _ssize_t got;
-
-    memset(&io, 0, sizeof io);
-    io.operation = SURFACE_MEDIA_ENUMERATE;
-    snprintf(io.name, sizeof io.name, "%s", name);
-    card_request(&io);
-    if (io.result != SURFACE_MEDIA_OK || strcmp(io.found, name) != 0 || io.size > CARD_WRITE_MAX) return -1;
-    size = io.size;
-    io.operation = SURFACE_MEDIA_OPEN;
-    card_request(&io);
-    if (io.result != SURFACE_MEDIA_OK) return -1;
-    reader = io.reader;
     buf = malloc((size_t)size + 1u);
-    got = buf != NULL ? card_read(reader, buf, (size_t)size, 0) : -1;
-    card_close(reader);
+    got = buf != NULL ? tiku_posix_media_pread(&volume, reader, buf, (size_t)size, 0) : -1;
+    tiku_posix_media_close(&volume, reader);
     if (got != (_ssize_t)size) {
         free(buf);
         return -1;
@@ -3527,17 +3327,7 @@ static int statvfs_node(const rnode_t *n, struct statvfs *sv)
         uint64_t now = surface_desktop_now_us();
 
         if (!card_space_known || now - card_space_at > CARD_SPACE_US) {
-            surface_media_io_t io;
-
-            memset(&io, 0, sizeof io);
-            io.operation = SURFACE_MEDIA_SPACE;
-            card_request(&io);
-            if (io.result != SURFACE_MEDIA_OK) {
-                errno = card_errno(io.result);
-                return -1;
-            }
-            card_space_bytes = io.offset;
-            card_space_free = io.size;
+            if (tiku_posix_media_space(&volume, &card_space_bytes, &card_space_free) < 0) return -1;
             card_space_at = now;
             card_space_known = 1;
         }
