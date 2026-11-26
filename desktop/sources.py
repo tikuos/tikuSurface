@@ -28,7 +28,6 @@ KIT_EXCLUDED = {
     'application/tiku_app_load.c': 'loadable modules',
     'application/tiku_client.c': 'process sessions',
     'application/tiku_conduct.c': 'development conductor; desktop/absent.c',
-    'application/tiku_remote.c': 'process sessions; desktop/absent.c',
     'application/tiku_resource_channel.c': 'process resource protocol; desktop/absent.c',
     'application/tiku_resource_endpoint.c': 'process resource protocol; desktop/absent.c',
     'device/tiku_channel.c': 'board link over a host port',

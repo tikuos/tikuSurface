@@ -17,7 +17,11 @@ DESKTOP_AR := $(patsubst %gcc,%ar,$(S31_CC))
 include $(SURFACE_ROOT)/desktop/desktop.mk
 
 APPL_SRCS := $(addprefix $(SURFACE_ROOT)/platform/tikuos/,bindings.c diagnostics.c \
-    desktop_bindings.c display.c input.c settings_io.c)
+    desktop_bindings.c local_form.c local_programs.c basic_window.c display.c input.c settings_io.c)
+include applications/board/gui/sources.mk
+APPL_SRCS += $(TIKU_BOARD_GUI_SRCS) applications/board/gui/tiku_draw_program.c
+APPL_SRCS += services/link/tiku_link_local.c
+APPL_SRCS += applications/board/samples/panel_demo.c
 ifeq ($(S31_PROFILE),s31-connected)
 S31_SHELL_COMMANDS += DNS NTP
 APPL_SRCS += shell/commands/tiku_shell_cmd_dns.c shell/commands/tiku_shell_cmd_ntp.c tikukits/net/ipv4/tiku_kits_net_dns.c \
@@ -38,7 +42,7 @@ SURFACE_PPA ?= 1
 ifeq ($(filter $(SURFACE_PPA),0 1),)
 $(error SURFACE_PPA must be 0 or 1)
 endif
-APPL_CFLAGS := -DSURFACE_PPA=$(SURFACE_PPA)
+APPL_CFLAGS := -DSURFACE_PPA=$(SURFACE_PPA) -DTIKU_APPL_GUI=1 -DTIKU_PROCESS_OBSERVERS_ENABLE=1 -DTIKU_BASIC_JOB_OWNER_ENABLE=1 -Iapplications/board/gui
 ifeq ($(S31_PROFILE),s31-connected)
 APPL_CFLAGS += -DTIKU_S31_RADIO_IMAGE_BOUNDS_ENABLE=1 -DTIKU_KITS_NET_DNS_ENABLE=1
 endif

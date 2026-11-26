@@ -527,3 +527,10 @@ $(BUILD)/test-desktop-media: tests/tikuos/test_desktop_media.c tests/tikuos/test
 desktop-media-test: $(BUILD)/test-desktop-media
 	$(BUILD)/test-desktop-media
 endif
+
+.PHONY: local-programs-test
+local-programs-test: $(BUILD)/test-local-programs
+	$(BUILD)/test-local-programs
+
+$(BUILD)/test-local-programs: tests/tikuos/test_local_programs.c platform/tikuos/local_programs.c $(TIKUOS_ROOT)/services/link/tiku_link_local.c $(TIKUOS_ROOT)/services/link/tiku_link.c desktop/local_programs.h | $(BUILD)
+	$(CC) -std=c11 -Wall -Wextra -Werror $(CFLAGS) -include $(BENCH)/include/tiku.h -I$(TIKUOS_ROOT)/applications/board/gui -I$(TIKUOS_ROOT) $(filter %.c,$^) -o $@

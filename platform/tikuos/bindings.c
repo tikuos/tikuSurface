@@ -5,6 +5,9 @@
  */
 #include "runtime.h"
 #include "boot.h"
+#if SURFACE_NATIVE_DESKTOP
+#include "../../desktop/local_programs.h"
+#endif
 #include <kernel/memory/tiku_mem.h>
 #include <kernel/process/tiku_process.h>
 #include <kernel/timers/tiku_clock.h>
@@ -68,6 +71,10 @@ TIKU_PROCESS_THREAD(surface_process, ev, data)
         TIKU_PROCESS_WAIT_EVENT_UNTIL(ev == TIKU_EVENT_POLL || ev == TIKU_EVENT_EXIT ||
             (ev == TIKU_EVENT_TIMER && data == &wake && tiku_timer_expired(&wake)));
         if (ev == TIKU_EVENT_EXIT) surface_runtime_stop();
+#if SURFACE_NATIVE_DESKTOP
+        surface_program_pump();
+        surface_basic_window_poll();
+#endif
         if (!surface_runtime_poll()) break;
 #if SURFACE_LCD_ENABLE
         if (surface_runtime_continue()) tiku_process_poll(&surface_process);
@@ -77,6 +84,20 @@ TIKU_PROCESS_THREAD(surface_process, ev, data)
     TIKU_PROCESS_END();
 }
 
+#if SURFACE_NATIVE_DESKTOP
+#include "tiku_gui.h"
+#include "tiku_draw_program.h"
+extern struct tiku_process gui_demo_process;
+
+static void form_exited(const tiku_process_observation_t *r, void *unused)
+{
+    (void)unused;
+    if (r->transition != TIKU_PROCESS_EXITING) return;
+    if (r->process == &gui_demo_process) tiku_gui_remove_owner(r->process);
+    tiku_draw_program_exited(r->process);
+}
+#endif
+
 int tiku_application_start(void)
 {
     if (!surface_os_in_owner()) return 0;
@@ -85,6 +106,10 @@ int tiku_application_start(void)
     surface_runtime_stats(&state);
     if (state.running && !tiku_process_is_running(&surface_process)) {
         tiku_process_start(&surface_process, NULL);
+#if SURFACE_NATIVE_DESKTOP
+        if (tiku_process_observer_add(form_exited, NULL))
+            tiku_process_start(&gui_demo_process, NULL);
+#endif
 #if SURFACE_LCD_ENABLE
         tiku_process_poll(&surface_process);
 #endif

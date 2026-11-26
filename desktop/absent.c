@@ -20,40 +20,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Out-of-process application sessions: no listening socket exists. */
-int tiku_remote_listen(tiku_remote_listener_t *listener)
-{
-    if (listener != NULL) listener->fd = -1;
-    return -1;
-}
-int tiku_remote_poll(tiku_remote_listener_t *listener) { (void)listener; return 0; }
-int tiku_remote_wait(tiku_remote_listener_t *listener, int timeout_us)
-{ (void)listener; (void)timeout_us; return 0; }
-void tiku_remote_shutdown(tiku_remote_listener_t *listener) { (void)listener; }
-int tiku_remote_sessions(const tiku_remote_listener_t *listener) { (void)listener; return 0; }
-tiku_msg_t *tiku_remote_said(tiku_remote_listener_t *listener, int index)
-{ (void)listener; (void)index; return NULL; }
-int tiku_remote_tell(tiku_remote_listener_t *listener, int index, const tiku_msg_t *m)
-{ (void)listener; (void)index; (void)m; return -1; }
-int tiku_remote_session_tell(tiku_remote_session_t *session, const tiku_msg_t *message)
-{ (void)session; (void)message; return -1; }
-tiku_remote_session_t *tiku_remote_owner(tiku_remote_listener_t *listener,
-                                         struct tiku_window *window)
-{ (void)listener; (void)window; return NULL; }
-tiku_remote_window_t *tiku_remote_window_of(tiku_remote_listener_t *listener,
-                                            const struct tiku_window *w)
-{ (void)listener; (void)w; return NULL; }
-const uint32_t *tiku_remote_pixels(const tiku_remote_window_t *win) { (void)win; return NULL; }
-void tiku_remote_event(tiku_remote_listener_t *listener, struct tiku_window *window,
-                       const tiku_event_t *event)
-{ (void)listener; (void)window; (void)event; }
-void tiku_remote_pick(tiku_remote_listener_t *listener, struct tiku_window *window,
-                      int command)
-{ (void)listener; (void)window; (void)command; }
-int tiku_remote_request_close(tiku_remote_listener_t *listener, struct tiku_window *window)
-{ (void)listener; (void)window; return -1; }
-void tiku_remote_window_closed(tiku_remote_listener_t *listener, struct tiku_window *window)
-{ (void)listener; (void)window; }
 int tiku_remote_process_handle(const tiku_remote_session_t *session, long *pid)
 { (void)session; if (pid != NULL) *pid = -1; return -1; }
 int tiku_remote_process_kill(int handle) { (void)handle; return -1; }

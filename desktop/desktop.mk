@@ -37,7 +37,7 @@ DESKTOP_ARCH ?= -march=rv32imafc_zicsr_zifencei -mabi=ilp32f
 # Bounds the shared shell sizes for a desktop computer, set for the panel's
 # PSRAM: entries per folder view, the largest state file an update reads,
 # the native settings table, the resource registry's providers, and the
-# remote sessions the listener holds (the panel serves none), and the
+# remote sessions for board programs, and the
 # notices one batch holds (an event list is a stack local).  A desktop
 # started on a fresh home holds 31 native entries and 52 providers.  The
 # settings files are polled for outside edits every 5 s instead of 0.5 s,
@@ -48,7 +48,7 @@ DESKTOP_ARCH ?= -march=rv32imafc_zicsr_zifencei -mabi=ilp32f
 # draw without them.
 DESKTOP_LIMITS := -DTIKU_TRK_POSES_MAX=256 -DTIKU_STATE_UPDATE_BYTES=262144 \
     -DTIKU_TRK_NATIVE_ENTRIES_MAX=128 -DTIKU_TRK_RESOURCE_PROVIDERS=128 \
-    -DTIKU_REMOTE_SESSIONS=1 -DTIKU_EVENTS_MAX=32 -DTIKU_SHELL_POLL_SCALE=10 \
+    -DTIKU_REMOTE_PACKET_ONLY=1 -DTIKU_REMOTE_SESSIONS=2 -DTIKU_EVENTS_MAX=32 -DTIKU_SHELL_POLL_SCALE=10 \
     -DTIKU_TRK_RECORD_AUTOSAVE_MS=3600000 \
     -DTIKU_TRK_NAV_DEPTH=4 -DTIKU_WINDOW_CACHE_BYTES=1048576 \
     -DTIKU_TRK_KEPT_PIXELS_BYTES=1048576

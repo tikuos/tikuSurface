@@ -191,11 +191,29 @@ int tiku_posix_close(int fd)
     return 0;
 }
 
+int surface_os_form_access(const char *path)
+{
+    if (!strcmp(path, "/gui/demo/lamp")) return 1;
+    if (!strcmp(path, "/gui/demo") || !strcmp(path, "/gui/demo/status")) return 0;
+    return -1;
+}
+
+int surface_os_form_write(const char *path, const void *data, size_t len)
+{
+    return surface_os_form_access(path) == 1 && !refuse_authority &&
+           len == 1 && !memcmp(data, "1", 1) ? 0 : -1;
+}
+
 int tiku_posix_stat(const char *path, struct stat *st)
 {
     int f = file_of(path);
 
     memset(st, 0, sizeof *st);
+    if (surface_os_form_access(path) >= 0) {
+        st->st_mode = strcmp(path, "/gui/demo") ? S_IFREG | 0444 : S_IFDIR | 0555;
+        st->st_ino = 0x40;
+        return 0;
+    }
     if (strcmp(path, "/data") == 0) {
         st->st_mode = S_IFDIR | 0755;
         return 0;
@@ -288,6 +306,16 @@ int main(void)
     assert(b->ops->stat(b, "/data", &m) == 0 && m.kind == TIKU_KIND_DIRECTORY &&
            (m.facts.perm & TIKU_P_WRITE));
 
+    assert(b->ops->stat(b, "/gui/demo", &m) == 0 && m.kind == TIKU_KIND_VIRTUAL_DIR);
+    assert(b->ops->stat(b, "/gui/demo/lamp", &m) == 0 &&
+           m.kind == TIKU_KIND_DEVICE_NODE && (m.facts.perm & TIKU_P_WRITE));
+    assert(b->ops->stat(b, "/gui/demo/missing", &m) < 0);
+    assert(b->ops->stat(b, "/gui/demo/status", &m) == 0 && !(m.facts.perm & TIKU_P_WRITE));
+    assert(b->ops->write(b, "/gui/demo/lamp", "1", 1, err, sizeof err) == 0);
+    assert(b->ops->write(b, "/gui/demo/status", "1", 1, err, sizeof err) < 0);
+    refuse_authority = 1;
+    assert(b->ops->write(b, "/gui/demo/lamp", "1", 1, err, sizeof err) < 0);
+    refuse_authority = 0;
     /* Values; a secret is not read. */
     assert(b->ops->read(b, "/sys/uptime", buf, sizeof buf) == 3 && !memcmp(buf, "42\n", 3));
     errno = 0;

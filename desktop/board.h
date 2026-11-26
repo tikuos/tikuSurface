@@ -9,6 +9,10 @@
 
 struct tiku_backend;
 
+/** @brief Write an editable local form row under the desktop's VFS authority. */
+int surface_os_form_access(const char *path);
+int surface_os_form_write(const char *path, const void *buf, size_t len);
+
 /** @brief A backend over the kernel's VFS, and in @p name the board's name
  *  (/sys/device/name, else "board") for its mount.  NULL when the manifest
  *  cannot be read. */

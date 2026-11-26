@@ -5,6 +5,12 @@
  */
 #include "boot.h"
 #include "runtime.h"
+#if SURFACE_NATIVE_DESKTOP
+#include "../../desktop/local_programs.h"
+#include <kernel/process/tiku_process.h>
+extern struct tiku_process draw_program_process;
+extern struct tiku_process gui_demo_process;
+#endif
 #include <kernel/vfs/tiku_vfs.h>
 #include <stdio.h>
 #include <string.h>
@@ -141,6 +147,24 @@ static int control_write(const char *text, size_t length)
         number(text + 7, length - 7, 3, &value))
         return surface_runtime_launch(value) ? TIKU_VFS_OK : TIKU_VFS_EIO;
 #if SURFACE_NATIVE_DESKTOP
+    if (length > 5 && !memcmp(text, "exit=", 5)) {
+        struct tiku_process *process = NULL;
+        if (length == 10 && !memcmp(text + 5, "basic", 5)) process = &draw_program_process;
+        if (length == 9 && !memcmp(text + 5, "demo", 4)) process = &gui_demo_process;
+        if (!process || !tiku_process_is_running(process)) return TIKU_VFS_EINVAL;
+        tiku_process_exit(process);
+        return TIKU_VFS_OK;
+    }
+    if (length == 9 && !memcmp(text, "reconnect", 9)) {
+        surface_program_reconnect();
+        return TIKU_VFS_OK;
+    }
+    if (length == 12 && !memcmp(text, "basic-window", 12))
+        return surface_basic_window_start() == 0 ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 11 && !memcmp(text, "basic-close", 11)) {
+        surface_basic_window_stop();
+        return TIKU_VFS_OK;
+    }
     if (length == 7 && !memcmp(text, "capture", 7))
         return surface_runtime_capture() ? TIKU_VFS_OK : TIKU_VFS_EIO;
     if (length > 5 && !memcmp(text, "hash=", 5))
@@ -210,6 +234,10 @@ static const tiku_vfs_node_t children[] = {
     {.name = "calibration", .type = TIKU_VFS_FILE, .read = calibration_read, .write = calibration_write, .req_cap = TIKU_VFS_CAP_SYS},
     {.name = "display", .type = TIKU_VFS_FILE, .read = display_read},
     {.name = "timing", .type = TIKU_VFS_FILE, .read = timing_read},
+#if SURFACE_NATIVE_DESKTOP
+    {.name = "queues", .type = TIKU_VFS_FILE, .read = surface_program_queue_status},
+    {.name = "program", .type = TIKU_VFS_FILE, .read = surface_basic_window_status},
+#endif
     {.name = "control", .type = TIKU_VFS_FILE, .write = control_write,
      .req_cap = TIKU_VFS_CAP_SYS}
 };

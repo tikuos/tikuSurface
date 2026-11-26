@@ -6,10 +6,12 @@ SURFACE_ROOT := $(patsubst %/product/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 ifeq ($(filter s31-local s31-connected,$(S31_PROFILE)),)
 $(error TikuSurface requires S31_PROFILE=s31-local or s31-connected)
 endif
-ifeq ($(TIKU_APPL_GUI),1)
-$(error TikuSurface and the remote GUI cannot be selected together)
-endif
 SURFACE_NATIVE_DESKTOP ?= 0
+ifeq ($(TIKU_APPL_GUI),1)
+ifneq ($(SURFACE_NATIVE_DESKTOP),1)
+$(error The board GUI requires SURFACE_NATIVE_DESKTOP=1 with TikuSurface)
+endif
+endif
 ifeq ($(SURFACE_NATIVE_DESKTOP),1)
 include $(SURFACE_ROOT)/desktop/firmware.mk
 else

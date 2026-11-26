@@ -268,6 +268,11 @@ static int model_of_stored(tiku_backend_t *be, const char *path, tiku_model_t *m
 /* THE BACKEND                                                               */
 /*---------------------------------------------------------------------------*/
 
+static int form_path(const char *path)
+{
+    return strcmp(path, "/gui/demo") == 0 || strncmp(path, "/gui/demo/", 10) == 0;
+}
+
 static int bd_stat(tiku_backend_t *be, const char *path, tiku_model_t *out)
 {
     board_t *b = be->impl;
@@ -290,7 +295,17 @@ static int bd_stat(tiku_backend_t *be, const char *path, tiku_model_t *out)
     n = board_find(b, path);
     if (n != NULL) model_of_node(be, n, out);
     pthread_mutex_unlock(&b->lock);
-    if (n == NULL) r = in_store(path) ? model_of_stored(be, path, out) : -1;
+    if (n == NULL) {
+        r = in_store(path) || form_path(path) ? model_of_stored(be, path, out) : -1;
+        if (r == 0 && form_path(path)) {
+            int access = surface_os_form_access(path);
+            if (access < 0) return -1;
+            int dir = out->kind == TIKU_KIND_DIRECTORY;
+            out->kind = dir ? TIKU_KIND_VIRTUAL_DIR : TIKU_KIND_DEVICE_NODE;
+            out->facts.perm = TIKU_P_READ | (access > 0 ? TIKU_P_WRITE : 0);
+            snprintf(out->type, sizeof out->type, "%s", dir ? "tiku-dir/namespace" : "tiku-node/value");
+        }
+    }
     return r;
 }
 
@@ -314,15 +329,16 @@ static int bd_list(tiku_backend_t *be, const char *path, tiku_entry_fn fn, void 
         stop = fn != NULL && fn(m, ctx) != 0;
     }
     pthread_mutex_unlock(&b->lock);
-    if (!stop && strcmp(path, BOARD_STORE) == 0) {
-        DIR *d = tiku_posix_opendir(BOARD_STORE);
+    if (!stop && (strcmp(path, BOARD_STORE) == 0 || strcmp(path, "/gui") == 0 ||
+                  strcmp(path, "/gui/demo") == 0)) {
+        DIR *d = tiku_posix_opendir(path);
         struct dirent *e;
 
         while (d != NULL && !stop && (e = tiku_posix_readdir(d)) != NULL) {
             char child[BOARD_PATH_MAX];
 
             if (e->d_name[0] == '.') continue;
-            if ((size_t)snprintf(child, sizeof child, "%s/%s", BOARD_STORE, e->d_name) >=
+            if ((size_t)snprintf(child, sizeof child, "%s/%s", path, e->d_name) >=
                 sizeof child) {
                 continue;
             }
@@ -395,6 +411,11 @@ static int bd_write(tiku_backend_t *be, const char *path, const void *buf, size_
     int store = in_store(path), fd, r = 0, e = 0;
     size_t put = 0u;
 
+    if (form_path(path)) {
+        int result = surface_os_form_write(path, buf, len);
+        if (result < 0) snprintf(err, errmax, "The form refused this value.");
+        return result;
+    }
     if (!changeable(be->impl, path)) {
         snprintf(err, errmax, "%s is not changed from the desktop.", path);
         return -1;

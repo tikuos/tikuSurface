@@ -78,7 +78,7 @@ ROM symbol declarations from the driver checkout without linking radio archives.
 Both select 80 MHz PSRAM. `S31_APPLICATION_MANIFEST` names this manifest; the
 profiles refuse to build without it. Missing product or SDK inputs are
 configuration errors.
-The remote GUI flag `TIKU_APPL_GUI=1` cannot accompany these profiles.
+The native desktop composes the board GUI client and form provider from the applications overlay. It also accepts an explicit `TIKU_APPL_GUI=1`. The diagnostic and LCD fixture runtimes accept the remote GUI through a separate application build.
 
 For UI/SDK LTO, export `sdk-s31-lto` and add `S31_UI_LTO=1`. Use a distinct
 `S31_DIR=build/surface-local-lto` or `build/surface-connected-lto`. The final

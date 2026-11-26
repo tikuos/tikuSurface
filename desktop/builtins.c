@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "camera.h"
+#include "tiku_posix.h"
+#include <fcntl.h>
 #include "tiku_app_product.h"
 #include "tiku_image_window.h"
 #include "tiku_trk_builtin.h"
@@ -58,11 +60,22 @@ static void camera_tick(int64_t now)
     tiku_image_window_tick(viewer, now);
     surface_camera_tick(now);
 }
+static int basic_start(void)
+{
+    int fd = tiku_posix_open("/surface/control", O_WRONLY);
+    if (fd < 0) return 0;
+    int ok = tiku_posix_write(fd, "basic-window", 12) == 12;
+    tiku_posix_close(fd);
+    return ok;
+}
+
 const tiku_trk_builtin_t *tiku_trk_builtins(int *count)
 {
     static const tiku_trk_builtin_t list[] = {
         {"camera", "Camera", "image/png,image/jpeg,image/bmp,image/x-ms-bmp",
-         "image_viewer", "graphics", camera_entry, camera_tick},
+         "image_viewer", "graphics", camera_entry, camera_tick, NULL},
+        {.id = "basic-counter", .name = "BASIC Counter", .icon = "calculator",
+         .category = "utilities", .start = basic_start},
     };
     *count = (int)(sizeof list / sizeof list[0]);
     return list;
