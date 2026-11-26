@@ -103,10 +103,10 @@ through TikuOS character devices. A read returns up to 64 bytes or `EIO` on a so
 
 `desktop/builtins.c` lists the applications linked into the desktop, which
 open their windows in its own workspace: Camera, in the Deskbar's Graphics &
-Design group. Opened alone it shows the board's camera; handed a PNG, JPEG
-or BMP file, from Tracker through the launcher's host for built-in
-applications, it shows the file in TikuImage's viewer from Stomme's
-`packages/apps/apps/image`.
+Design group, and Sound Recorder among its applications. Camera opened
+alone shows the board's camera; handed a PNG, JPEG or BMP file, from Tracker
+through the launcher's host for built-in applications, it shows the file in
+TikuImage's viewer from Stomme's `packages/apps/apps/image`.
 
 Camera's window (`desktop/camera.c`) asks the owner turn, through the
 bridge's camera request served by `platform/tikuos/camera.c`, to start the
@@ -131,6 +131,25 @@ is taken; the view says so meanwhile. Photos shows the last one saved in
 the viewer. The photo's buffer comes from the heap while it is encoded and
 saved; closing the window stops the stream and the sensor once the running
 request ends and frees the frame then.
+
+Sound Recorder (`desktop/recorder.c`) records the board's microphones
+through the kernel's microphone service (`services/audio/AGENTS.md` in
+TikuOS). Record writes `1` to `/sys/audio/mic/enable`, under the desktop's
+`TIKU_VFS_CAP_HW` authority, and opens `/dev/mic`; each desktop turn it
+reads what waits, up to 16 reads of 4,096 samples, into a take held in the
+heap a second to a 32,000-byte chunk, and draws the last four seconds as a
+waveform in the scope with a level meter beside the elapsed time. Stop
+writes `0` and hands the take to a job, which writes it as a mono 16 kHz
+PCM16 WAV named `recording-YYYYMMDD-HHMMSS.wav` in `~/Recordings` on the
+card. The take ends when the heap has no room for the next second, when the
+microphone fails, or when the window closes, and is saved in each case.
+Samples the microphone's four-second ring dropped while the desktop did not
+read, such as during a screen capture over the UART, are reported with the
+saved take.
+The list shows the WAV files in `~/Recordings`, newest first; a tapped one's
+waveform fills the scope. The microphone's gain is 30 dB unless
+`/sys/audio/mic/gain` is set. `S31_MIC=1`, set in `desktop/firmware.mk`,
+builds the service and its nodes into the image.
 
 The viewer's window fills the screen below the bar, and it decodes each
 picture no larger than its view, after letting the one shown go: a baseline

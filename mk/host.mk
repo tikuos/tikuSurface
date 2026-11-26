@@ -272,7 +272,7 @@ LCD_TEST_RUNTIME := $(if $(filter 1,$(SURFACE_IMAGE)),tests/runtime_image.c,$(if
 
 $(BUILD)/test-runtime-lcd: platform/tikuos/media.c platform/tikuos/media.h tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/runtime.c platform/tikuos/runtime.h platform/tikuos/presentation.c platform/tikuos/presentation.h platform/tikuos/display.h $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
 	$(CC) $(FLAGS) -DSURFACE_LCD_ENABLE=1 -Iplatform/tikuos tests/test_runtime_lcd.c tests/heap_trap.c $(PRODUCT) $(LCD_TEST_RUNTIME) platform/tikuos/presentation.c platform/tikuos/media.c $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
-test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-posix-layer $(BUILD)/test-board $(BUILD)/test-sys $(BUILD)/test-camera $(BUILD)/test-posix-threads-tsan $(BUILD)/test-posix-threads-asan $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
+test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/test-posix-layer $(BUILD)/test-board $(BUILD)/test-sys $(BUILD)/test-camera $(BUILD)/test-recorder $(BUILD)/test-posix-threads-tsan $(BUILD)/test-posix-threads-asan $(BUILD)/test-surface $(BUILD)/test-runtime $(BUILD)/test-presentation $(BUILD)/test-runtime-lcd
 	$(BUILD)/test-product-acceptance theme
 	$(BUILD)/test-product-acceptance reset
 	$(BUILD)/test-product-acceptance states
@@ -283,6 +283,7 @@ test: $(BUILD)/test-settings $(BUILD)/test-touch $(BUILD)/test-gesture $(BUILD)/
 	$(BUILD)/test-board
 	$(BUILD)/test-sys
 	$(BUILD)/test-camera
+	$(BUILD)/test-recorder
 	setarch $(HOST_MACHINE) -R $(BUILD)/test-posix-threads-tsan
 	$(BUILD)/test-posix-threads-asan
 	$(BUILD)/test-surface
@@ -333,6 +334,14 @@ $(BUILD)/test-camera: tests/test_camera.c desktop/camera.c desktop/camera.h desk
 	$(CC) $(MEDIA_INCLUDES) $(SDK_CFLAGS) -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined \
 	    -Idesktop $(addprefix -Ifoundation/kits/,support storage interface) \
 	    tests/test_camera.c $(SDK_LIBRARIES) -lm -o $@
+# Sound Recorder's window over a fake microphone behind the POSIX calls and
+# a job runner, drawn with the SDK's interface kit; takes are written as
+# real files.
+$(BUILD)/test-recorder: tests/test_recorder.c desktop/recorder.c desktop/recorder.h desktop/bridge.h \
+    $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
+	$(CC) $(MEDIA_INCLUDES) $(SDK_CFLAGS) -D_DEFAULT_SOURCE -Wall -Wextra -Werror -O1 -g \
+	    -fsanitize=address,undefined -Idesktop $(addprefix -Ifoundation/kits/,support storage interface) \
+	    tests/test_recorder.c $(SDK_LIBRARIES) -lm -o $@
 # The system facts the desktop's kits ask of TikuOS, over fake kernel nodes;
 # the kits' headers come from the pinned foundation.
 $(BUILD)/test-sys: tests/test_sys.c desktop/sys.c desktop/bridge.h desktop/bridge_os.h \

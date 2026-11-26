@@ -121,6 +121,10 @@ int surface_os_desktop_authority(void)
 #if TIKU_S31_WIFI_ENABLE
     cap |= TIKU_VFS_CAP_NET;
 #endif
+#if TIKU_MIC_ENABLE
+    /* Sound Recorder switches the microphones and sets their gain. */
+    cap |= TIKU_VFS_CAP_HW;
+#endif
     (void)tiku_posix_authority_set(cap);
     return 0;
 }

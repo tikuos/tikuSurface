@@ -33,6 +33,8 @@ APPL_SRCS += interfaces/input/tiku_touch_gt1151.c drivers/input/gt1151/tiku_drv_
 APPL_SRCS += interfaces/display/tiku_display.c interfaces/display/tiku_display_async.c \
     arch/esp32s31/tiku_display_arch.c arch/esp32s31/tiku_lcdcam_arch.c arch/esp32s31/tiku_dma_arch.c \
     arch/esp32s31/tiku_ppa_arch.c arch/esp32s31/tiku_dma2d_arch.c
+# Sound Recorder: the microphones as the kernel's /dev/mic.
+S31_MIC ?= 1
 # Camera: the SC101IOT on the DVP port and the JPEG encoder.
 APPL_SRCS += $(SURFACE_ROOT)/platform/tikuos/camera.c arch/esp32s31/tiku_camera_arch.c \
     arch/esp32s31/tiku_jpeg_arch.c
