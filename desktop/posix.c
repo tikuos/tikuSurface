@@ -98,12 +98,14 @@ static void change_in(const rnode_t *n)
 
 static void enter(void);
 static void leave(void);
+static unsigned card_observe(void);
 
 int tiku_posix_changes(uint64_t *next, uint64_t *dirs, int max, int *complete)
 {
     int n = 0;
 
     enter();
+    (void)card_observe();
     *complete = 1;
     if (*next == UINT64_MAX) {
         *next = change_total;
@@ -325,7 +327,7 @@ static time_t wall(void)
     return now.tv_sec;
 }
 
-static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
+static rnode_t *node_alloc(const char *name, mode_t mode)
 {
     rnode_t *n = calloc(1, sizeof *n);
 
@@ -333,6 +335,11 @@ static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
     n->born = window;
     snprintf(n->name, sizeof n->name, "%s", name);
     n->mode = mode;
+    return n;
+}
+
+static void node_publish(rnode_t *parent, rnode_t *n)
+{
     n->ino = next_ino++;
     n->mtime = wall();
     n->parent = parent;
@@ -342,6 +349,13 @@ static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
         parent->child = n;
         parent->mtime = n->mtime;
     }
+}
+
+static rnode_t *node_new(rnode_t *parent, const char *name, mode_t mode)
+{
+    rnode_t *n = node_alloc(name, mode);
+
+    if (n != NULL) node_publish(parent, n);
     return n;
 }
 
@@ -392,8 +406,9 @@ static rnode_t *child_named(rnode_t *dir, const char *name, size_t len)
 /* THE SD CARD AT /Card                                                      */
 /*---------------------------------------------------------------------------*/
 /* The card's native media volume names its objects with '/' inside the
- * name.  /Card shows each prefix as a directory, listed the first time a
- * path walks into it, and each object as a file whose bytes come through the
+ * name.  /Card shows each prefix as a directory, listed when a
+ * path walks into it after a change by another client, and each object
+ * as a file whose bytes come through the
  * kernel's media bridge; the prefix "home" is /home, not shown in /Card.  A
  * file opened to write holds its bytes in its node and publishes them whole
  * at fsync() or close(), one atomic replacement of at most CARD_WRITE_MAX
@@ -431,6 +446,8 @@ typedef struct card_node {
     unsigned writers;       /* descriptors open on it to write */
     unsigned version;       /* counts the writes into the staged bytes */
     unsigned checked;       /* card_generation when last found on the card */
+    unsigned listed;        /* generation of the last complete directory scan */
+    int present;            /* found while merging a directory scan */
     int streaming;          /* written past CARD_WRITE_MAX: data holds the bytes from streamed */
     int broken;             /* a piece of the stream failed: writes refused until the last close */
     int flushing;           /* a piece is on its way to the card: other writers wait */
@@ -442,7 +459,23 @@ typedef struct card_node {
 /* Changes made to the card by another client, as the bridge counts them:
  * each new count starts a generation, and a file is found on the card again
  * by name before its first use in a new generation. */
-static unsigned card_foreign_seen, card_generation;
+static unsigned card_foreign_seen, card_generation, card_local_generation;
+
+/** @brief Count a media change from another client and notify both mount views. */
+static unsigned card_observe(void)
+{
+    if (root != NULL && surface_desktop_bridge.card_mounted) {
+        unsigned foreign = surface_desktop_card_foreign();
+
+        if (foreign != card_foreign_seen) {
+            card_foreign_seen = foreign;
+            card_generation++;
+            change_in(root);
+            mutations++;
+        }
+    }
+    return card_generation;
+}
 
 /** @brief Release @p n's card information and the bytes it keeps. */
 static void card_forget(rnode_t *n)
@@ -506,103 +539,200 @@ static void card_request(surface_media_io_t *io)
     card_wait_end();
 }
 
-/** @brief List the card objects under @p dir's prefix into the tree: the
- *  first name segment past the prefix becomes a directory, a name without
- *  one a file.  A changed names epoch ends the listing where it stands. */
 static int card_is_trash(const rnode_t *dir);
 static void card_origins_load(rnode_t *dir);
 static void card_origins_save(rnode_t *dir);
+static int card_errno(int result);
+static void card_remove_node(rnode_t *n);
 
-static void card_load(rnode_t *dir)
+typedef struct card_entry {
+    struct card_entry *next;
+    rnode_t *previous, *addition;
+    char path[CARD_NAME];
+    mode_t mode;
+    uint64_t id, rank, epoch, size;
+} card_entry_t;
+
+/** @brief Read one names epoch under prefix into a private list. */
+static int card_entries(const char *prefix, int trash, card_entry_t **entries,
+                        uint64_t *folder, uint64_t *origins)
 {
-    surface_media_io_t io;
-    char prefix[CARD_NAME];
-    size_t n = strlen(dir->card->name);
+    surface_media_io_t io = {0};
+    size_t n = strlen(prefix);
 
-    dir->card->loaded = CARD_LISTING;
-    if (n + 2u > CARD_NAME) {
-        dir->card->loaded = CARD_LISTED;
-        announce_change();
-        return;
-    }
-    memcpy(prefix, dir->card->name, n);
-    if (n) prefix[n++] = '/';
-    prefix[n] = '\0';
-    memset(&io, 0, sizeof io);
     memcpy(io.name, prefix, n + 1u);
     for (unsigned step = 0; step < CARD_ENTRIES; step++) {
-        const char *rest, *slash;
-        char found[CARD_NAME];
-
         io.operation = SURFACE_MEDIA_ENUMERATE;
         card_request(&io);
-        if (io.result != SURFACE_MEDIA_OK) break;
-        memcpy(found, io.found, CARD_NAME);
-        found[CARD_NAME - 1u] = '\0';
-        if (strncmp(found, prefix, n) != 0) break;
-        rest = found + n;
-        slash = strchr(rest, '/');
+        if (io.result == SURFACE_MEDIA_END) return 0;
+        if (io.result != SURFACE_MEDIA_OK) return card_errno(io.result);
+        io.found[CARD_NAME - 1u] = '\0';
+        if (strncmp(io.found, prefix, n) != 0) return 0;
+        const char *leaf = io.found + n;
+        char *slash = strchr(io.found + n, '/');
+        size_t len = slash ? (size_t)(slash - io.found) : strlen(io.found);
+        int visible = 1;
+
         if (slash != NULL) {
-            size_t d = (size_t)(slash - rest);
-            char leaf[NAME_MAX_BYTES];
-
-            if (d == 0 || d >= NAME_MAX_BYTES || n + d + 2u > CARD_NAME) break;
-            memcpy(leaf, rest, d);
-            leaf[d] = '\0';
-            if (n == 0 && strcmp(leaf, SURFACE_HOME_CARD) == 0) {
-                /* The home's folder is /home, not /Card/home. */
-            } else if (child_named(dir, leaf, d) == NULL) {
-                rnode_t *c = node_new(dir, leaf, S_IFDIR | 0755);
-
-                if (c == NULL || card_mark(c, found, n + d) != 0) break;
-            }
-            /* The next name past the whole subtree: '0' follows '/'. */
-            memcpy(io.name, found, n + d);
-            io.name[n + d] = '0';
-            io.name[n + d + 1u] = '\0';
+            if (len == n || len + 2u > CARD_NAME) return EIO;
+            visible = n != 0 || len != sizeof SURFACE_HOME_CARD - 1u ||
+                      memcmp(leaf, SURFACE_HOME_CARD, len) != 0;
+            memcpy(io.name, io.found, len);
+            io.name[len] = '0';  /* The next key beyond this prefix and '/'. */
+            io.name[len + 1u] = '\0';
             io.exclusive = 0;
         } else {
-            size_t f = strlen(rest);
-
-            if (f == CARD_FOLDER_LEN && memcmp(rest, CARD_FOLDER, f) == 0) {
-                dir->card->folder = io.id;     /* the placeholder is not listed */
-            } else if (n == 0 && f > CARD_STREAM_LEN && memcmp(rest, CARD_STREAM, CARD_STREAM_LEN) == 0) {
-                /* nor is a large write's hidden object */
-            } else if (card_is_trash(dir) && f == CARD_ORIGINS_LEN && memcmp(rest, CARD_ORIGINS, f) == 0) {
-                dir->card->origins = io.id;    /* nor is a Trash's record */
-            } else if (f > 0 && f < NAME_MAX_BYTES && child_named(dir, rest, f) == NULL) {
-                rnode_t *c = node_new(dir, rest, S_IFREG | 0644);
-
-                if (c == NULL || card_mark(c, found, strlen(found)) != 0) break;
-                c->size = (size_t)io.size;
-                c->card->stored = c->size;
-                c->card->epoch = io.epoch;
-                c->card->rank = io.rank;
-                c->card->id = io.id;
+            if (strcmp(leaf, CARD_FOLDER) == 0) {
+                *folder = io.id;
+                visible = 0;
+            } else if (trash && strcmp(leaf, CARD_ORIGINS) == 0) {
+                *origins = io.id;
+                visible = 0;
+            } else if (n == 0 && strlen(leaf) > CARD_STREAM_LEN &&
+                       memcmp(leaf, CARD_STREAM, CARD_STREAM_LEN) == 0) {
+                visible = 0;
             }
-            memcpy(io.name, found, CARD_NAME);
+            memcpy(io.name, io.found, len + 1u);
             io.exclusive = 1;
         }
+        if (visible && len > n) {
+            card_entry_t *e = calloc(1, sizeof *e);
+
+            if (e == NULL) return ENOMEM;
+            memcpy(e->path, io.found, len);
+            e->path[len] = '\0';
+            e->mode = slash ? S_IFDIR | 0755 : S_IFREG | 0644;
+            e->id = slash ? 0 : io.id;
+            e->rank = io.rank;
+            e->epoch = io.epoch;
+            e->size = slash ? 0 : io.size;
+            e->next = *entries;
+            *entries = e;
+        }
     }
-    if (dir->card->origins != 0) card_origins_load(dir);
-    dir->card->loaded = CARD_LISTED;
-    announce_change();
+    return EOVERFLOW;
 }
 
-/** @brief Have card directory @p dir's entries in the tree: list them, or
- *  wait while another thread lists them. */
-static void card_ready(rnode_t *dir)
+/** @brief Keep an unpublished writer and the folders through which it is open. */
+static int card_has_writer(const rnode_t *n)
 {
-    while (dir->card->loaded == CARD_LISTING) await_change();
-    if (dir->card->loaded == CARD_UNLISTED) card_load(dir);
+    if (n->card == NULL || n->card->writers != 0) return 1;
+    for (rnode_t *c = n->child; c != NULL; c = c->next)
+        if (card_has_writer(c)) return 1;
+    return 0;
 }
 
-/** @brief @p dir's child named by @p len bytes of @p name, listing a card
- *  directory first. */
+static void card_remove_branch(rnode_t *n)
+{
+    while (n->child != NULL) card_remove_branch(n->child);
+    card_remove_node(n);
+}
+
+/** @brief Merge a complete snapshot; retain live descriptors and file identity checks. */
+static int card_merge(rnode_t *dir, size_t prefix, card_entry_t *entries)
+{
+    for (card_entry_t *e = entries; e != NULL; e = e->next) {
+        const char *leaf = e->path + prefix;
+        rnode_t *c = child_named(dir, leaf, strlen(leaf));
+
+        e->previous = c;
+        if (c != NULL && (c->card == NULL || S_ISDIR(c->mode) == S_ISDIR(e->mode)))
+            continue;
+        if (c != NULL && card_has_writer(c)) return EBUSY;
+        c = e->addition = node_alloc(leaf, e->mode);
+        if (c == NULL || card_mark(c, e->path, strlen(e->path)) != 0) return ENOMEM;
+        c->card->id = e->id;
+        c->card->epoch = e->epoch;
+        c->card->rank = e->rank;
+        c->size = c->card->stored = (size_t)e->size;
+    }
+    for (rnode_t *c = dir->child; c != NULL; c = c->next)
+        if (c->card != NULL) c->card->present = 0;
+    for (card_entry_t *e = entries; e != NULL; e = e->next) {
+        rnode_t *c = e->previous;
+
+        if (e->addition != NULL) {
+            if (c != NULL) card_remove_branch(c);
+            c = e->addition;
+            node_publish(dir, c);
+            e->addition = NULL;
+        }
+        if (c->card != NULL) c->card->present = 1;
+    }
+    for (rnode_t *c = dir->child, *next; c != NULL; c = next) {
+        next = c->next;
+        if (c->card != NULL && !c->card->present && !card_has_writer(c))
+            card_remove_branch(c);
+    }
+    return 0;
+}
+
+/** @brief Return 0 for a complete directory listing, or -1 with errno set. */
+static int card_ready(rnode_t *dir)
+{
+    card_entry_t *entries = NULL;
+    uint64_t folder = 0, origins = 0;
+    char prefix[CARD_NAME];
+    unsigned generation, local;
+    int error, previous;
+    size_t len;
+
+    card_waiting++;
+    while (dir->card->loaded == CARD_LISTING) await_change();
+    if (dir->parent == NULL) {
+        card_wait_end();
+        errno = ENOENT;
+        return -1;
+    }
+    local = card_local_generation;
+    generation = card_observe();
+    previous = dir->card->loaded;
+    if (previous == CARD_LISTED && dir->card->listed == generation) {
+        card_wait_end();
+        return 0;
+    }
+    len = strlen(dir->card->name);
+    if (len != 0 && len + 2u > sizeof prefix) {
+        card_wait_end();
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memcpy(prefix, dir->card->name, len);
+    if (len != 0) prefix[len++] = '/';
+    prefix[len] = '\0';
+    dir->card->loaded = CARD_LISTING;
+    error = card_entries(prefix, card_is_trash(dir), &entries, &folder, &origins);
+    if (error == 0 && (generation != card_observe() || local != card_local_generation))
+        error = ESTALE;
+    if (error == 0 && dir->parent == NULL) error = ENOENT;
+    if (error == 0) error = card_merge(dir, len, entries);
+    while (entries != NULL) {
+        card_entry_t *next = entries->next;
+        if (entries->addition != NULL) node_free(entries->addition);
+        free(entries);
+        entries = next;
+    }
+    if (error == 0) {
+        dir->card->folder = folder;
+        dir->card->origins = origins;
+        if (origins != 0 && card_is_trash(dir)) card_origins_load(dir);
+        dir->card->listed = generation;
+    }
+    dir->card->loaded = error ? previous : CARD_LISTED;
+    announce_change();
+    card_wait_end();
+    if (error == 0) return 0;
+    errno = error;
+    return -1;
+}
+
+/** @brief Find a child after listing its mounted directory. */
 static rnode_t *child_in(rnode_t *dir, const char *name, size_t len)
 {
-    if (dir->card != NULL && S_ISDIR(dir->mode)) card_ready(dir);
-    return child_named(dir, name, len);
+    if (dir->card != NULL && S_ISDIR(dir->mode) && card_ready(dir) != 0) return NULL;
+    rnode_t *c = child_named(dir, name, len);
+    if (c == NULL) errno = ENOENT;
+    return c;
 }
 
 /** @brief Whether @p path is @p mount or under it, as an absolute path in
@@ -748,6 +878,7 @@ static void card_change_begin(void)
 static void card_change_end(void)
 {
     card_changing = 0;
+    card_local_generation++;
     card_wait_end();
     announce_change();
 }
@@ -1108,12 +1239,13 @@ static int card_keep_folder(rnode_t *dir)
 }
 
 /** @brief List card directory @p dir and every directory under it. */
-static void card_ready_all(rnode_t *dir)
+static int card_ready_all(rnode_t *dir)
 {
-    card_ready(dir);
+    if (card_ready(dir) != 0) return -1;
     for (rnode_t *c = dir->child; c != NULL; c = c->next) {
-        if (S_ISDIR(c->mode)) card_ready_all(c);
+        if (S_ISDIR(c->mode) && c->card != NULL && card_ready_all(c) != 0) return -1;
     }
+    return 0;
 }
 
 /** @brief Take card node @p n out of the tree for good: freed now, at the
@@ -1130,13 +1262,7 @@ static void card_remove_node(rnode_t *n)
  *  last found on the card before another client's latest change to it. */
 static int card_unchecked(const rnode_t *n)
 {
-    unsigned foreign = surface_desktop_card_foreign();
-
-    if (foreign != card_foreign_seen) {
-        card_foreign_seen = foreign;
-        card_generation++;
-    }
-    return n->card->checked != card_generation && n->card->id != 0 && n->card->writers == 0;
+    return n->card->checked != card_observe() && n->card->id != 0 && n->card->writers == 0;
 }
 
 /** @brief Find card file @p n again by name when card_unchecked(), dropping
@@ -1224,12 +1350,7 @@ static rnode_t *resolve(const char *path, rnode_t **parent, const char **leaf, s
                     *leaf_len = strlen(up->name);
                     return up;
                 }
-                {
-                    rnode_t *c = child_in(n, p, len);
-
-                    if (c == NULL) errno = ENOENT;
-                    return c;
-                }
+                return child_in(n, p, len);
             }
             if (len == 1 && p[0] == '.') {
                 /* stays */
@@ -1238,10 +1359,7 @@ static rnode_t *resolve(const char *path, rnode_t **parent, const char **leaf, s
             } else {
                 rnode_t *c = child_in(n, p, len);
 
-                if (c == NULL) {
-                    errno = ENOENT;
-                    return NULL;
-                }
+                if (c == NULL) return NULL;
                 n = c;
             }
             p = end;
@@ -1389,10 +1507,11 @@ static int surface_desktop_files_locked(void)
      * there at its first read (stored_copy()). */
     if (surface_desktop_bridge.card_mounted) {
         /* Desktop and Documents are made on the card the first time. */
-        card_ready(home);
-        if (child_named(home, "Documents", 9u) == NULL && mkdir_locked("/home/Documents", 0755) == 0)
-            seed("/home/Documents/Welcome.txt", "TikuSurface runs TikuDesktop's shell on TikuOS.\n", 0644);
-        if (child_named(home, "Desktop", 7u) == NULL) (void)mkdir_locked("/home/Desktop", 0755);
+        if (card_ready(home) == 0) {
+            if (child_named(home, "Documents", 9u) == NULL && mkdir_locked("/home/Documents", 0755) == 0)
+                seed("/home/Documents/Welcome.txt", "TikuSurface runs TikuDesktop's shell on TikuOS.\n", 0644);
+            if (child_named(home, "Desktop", 7u) == NULL) (void)mkdir_locked("/home/Desktop", 0755);
+        }
     } else {
         /* No card: Desktop and Documents say so and take nothing new. */
         rnode_t *n;
@@ -2608,7 +2727,10 @@ static int card_rmdir(rnode_t *n)
         return -1;
     }
     card_change_begin();
-    card_ready(n);
+    if (card_ready(n) != 0) {
+        card_change_end();
+        return -1;
+    }
     if (n->parent == NULL) {
         errno = ENOENT;
         goto out;
@@ -2783,7 +2905,7 @@ static int card_rename_dir(rnode_t *from, rnode_t *to, rnode_t *parent, const ch
     size_t old_len = strlen(from->card->name), new_len = strlen(name);
     unsigned done = 0, undone = 0;
 
-    card_ready_all(from);
+    if (card_ready_all(from) != 0) return -1;
     if (from->parent == NULL) {
         errno = ENOENT;
         return -1;
@@ -2799,7 +2921,7 @@ static int card_rename_dir(rnode_t *from, rnode_t *to, rnode_t *parent, const ch
             errno = ENOTDIR;
             return -1;
         }
-        card_ready(to);
+        if (card_ready(to) != 0) return -1;
         if (to->child != NULL) {
             errno = ENOTEMPTY;
             return -1;
@@ -3561,7 +3683,7 @@ static DIR *opendir_locked(const char *path)
         errno = ENOTDIR;
         return NULL;
     }
-    if (n->card != NULL) card_ready(n);
+    if (n->card != NULL && card_ready(n) != 0) return NULL;
     d = calloc(1, sizeof *d);
     if (d == NULL) {
         errno = ENOMEM;

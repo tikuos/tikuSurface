@@ -33,12 +33,41 @@ ssize_t _write(int fd, const void *buf, size_t n);
 off_t _lseek(int fd, off_t offset, int whence);
 int _stat(const char *path, struct stat *st);
 int surface_desktop_files(void);
+int tiku_posix_changes(uint64_t *next, uint64_t *dirs, int max, int *complete);
+int tiku_posix_path_of(uint64_t ino, char *out, size_t max);
 int mkstemp(char *tmpl);
+
+/* Observe the node size at a RAM mkdir to inject a failure during a card merge. */
+static size_t node_bytes;
+static int observe_allocation, nodes_before_failure = -1;
+void *__real_calloc(size_t count, size_t size);
+void *__wrap_calloc(size_t count, size_t size)
+{
+    if (count == 1 && observe_allocation) {
+        node_bytes = size;
+        observe_allocation = 0;
+    }
+    if (count == 1 && size == node_bytes &&
+        nodes_before_failure >= 0 && nodes_before_failure-- == 0) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    return __real_calloc(count, size);
+}
 
 /* The desktop side the layer calls: the card is the fixture's. */
 surface_desktop_bridge_t surface_desktop_bridge;
 char **environ;
-void surface_desktop_card(surface_media_io_t *io) { card_fixture_request(io); }
+static const char *change_after_entry;
+void surface_desktop_card(surface_media_io_t *io)
+{
+    card_fixture_request(io);
+    if (change_after_entry != NULL && io->operation == SURFACE_MEDIA_ENUMERATE &&
+        io->result == SURFACE_MEDIA_OK && !strcmp(io->found, change_after_entry)) {
+        change_after_entry = NULL;
+        card_fixture_put("notes/z-last", "after", 5);
+    }
+}
 unsigned surface_desktop_card_foreign(void) { return card_fixture_foreign(); }
 void surface_desktop_log(const void *bytes, size_t length) { (void)bytes; (void)length; }
 uint64_t surface_desktop_now_us(void) { return 1000000u; }
@@ -176,6 +205,75 @@ int main(void)
 
     /* The card mounted read-write, its own size, its folders listed. */
     assert(slurp("/proc/self/mounts", buf, sizeof buf) > 0 && strstr((char *)buf, "/Card mfs rw") != NULL);
+    assert(strstr(names("/Card/notes"), "hello.txt ") != NULL);
+    {
+        uint64_t cursor = UINT64_MAX, other, dirs[2];
+        int complete;
+        char path[8];
+
+        assert(tiku_posix_changes(&cursor, dirs, 2, &complete) == 0);
+        other = cursor;
+        card_fixture_put("notes/peer.txt", "other", 5);
+        assert(tiku_posix_changes(&cursor, dirs, 2, &complete) == 1 && complete);
+        assert(tiku_posix_path_of(dirs[0], path, sizeof path) == 0 && !strcmp(path, "/"));
+        assert(tiku_posix_changes(&other, dirs, 2, &complete) == 1 && other == cursor);
+    }
+    assert(strstr(names("/Card/notes"), "peer.txt ") != NULL);
+    assert(card_read_is("/Card/notes/peer.txt", "other"));
+    card_fixture_delete("notes/peer.txt");
+    assert(strstr(names("/Card/notes"), "peer.txt ") == NULL);
+
+    /* A listing interrupted by another media change can be opened again. */
+    card_fixture_put("notes/a-first", "before", 6);
+    change_after_entry = "notes/a-first";
+    assert(opendir("/Card/notes") == NULL && errno == ESTALE && change_after_entry == NULL);
+    assert(strstr(names("/Card/notes"), "a-first ") && strstr(names("/Card/notes"), "z-last "));
+    card_fixture_delete("notes/a-first");
+    card_fixture_delete("notes/z-last");
+
+    fd = _open("/Card/notes/writer", O_CREAT | O_WRONLY, 0644);
+    assert(fd >= 0 && _write(fd, "pending", 7) == 7);
+    card_fixture_put("notes/other", "present", 7);
+    assert(strstr(names("/Card/notes"), "other ") && strstr(names("/Card/notes"), "writer "));
+    assert(_close(fd) == 0 && card_read_is("/Card/notes/writer", "pending"));
+    card_fixture_delete("notes/other");
+    card_fixture_delete("notes/writer");
+
+    /* One path changes between file and folder while a directory stream is open. */
+    card_fixture_put("notes/shared", "file", 4);
+    assert(card_read_is("/Card/notes/shared", "file"));
+    card_fixture_delete("notes/shared");
+    card_fixture_put("notes/shared/child", "child", 5);
+    assert(card_read_is("/Card/notes/shared/child", "child"));
+    {
+        DIR *open_folder = opendir("/Card/notes/shared");
+        assert(open_folder != NULL);
+        card_fixture_delete("notes/shared/child");
+        card_fixture_put("notes/shared", "back", 4);
+        assert(card_read_is("/Card/notes/shared", "back"));
+        assert(closedir(open_folder) == 0);
+    }
+    card_fixture_delete("notes/shared");
+
+    /* An allocation failure during a refresh publishes no partial directory. */
+    observe_allocation = 1;
+    assert(mkdir("/tmp/alloc-size", 0755) == 0 && node_bytes != 0);
+    assert(strstr(names("/Card/notes"), "hello.txt "));
+    card_fixture_put("notes/first-peer", "1", 1);
+    card_fixture_put("notes/second-peer", "2", 1);
+    {
+        uint64_t cursor = UINT64_MAX, dirs[2];
+        int complete;
+
+        assert(tiku_posix_changes(&cursor, dirs, 2, &complete) == 0);
+        nodes_before_failure = 1;
+        assert(opendir("/Card/notes") == NULL && errno == ENOMEM && nodes_before_failure == -1);
+        assert(tiku_posix_changes(&cursor, dirs, 2, &complete) == 0 && complete);
+        assert(strstr(names("/Card/notes"), "first-peer ") && strstr(names("/Card/notes"), "second-peer "));
+    }
+    card_fixture_delete("notes/first-peer");
+    card_fixture_delete("notes/second-peer");
+
     assert(statvfs("/", &sv) == -1 && errno == ENOTSUP);
     {
         int fd = _open("/proc/self/mounts", O_RDONLY, 0);

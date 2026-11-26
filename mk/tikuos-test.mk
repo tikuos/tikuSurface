@@ -64,7 +64,7 @@ $(BUILD)/test-posix-card: tests/test_posix_card.c desktop/posix.c desktop/bridge
 	$(CC) $(CARD_FIXTURE_FLAGS) -c tests/tikuos/card_fixture.c -o $(BUILD)/card-fixture.o
 	$(CC) $(CARD_FIXTURE_FLAGS) -c platform/tikuos/media_io.c -o $(BUILD)/card-media-io.o
 	$(foreach f,$(MEDIA_CORE),$(CC) $(CARD_FIXTURE_FLAGS) -c $(f) -o $(BUILD)/card-$(notdir $(f:.c=.o)) &&) true
-	$(CC) $(POSIX_LAYER_FLAGS) -Itests tests/test_posix_card.c desktop/posix.c $(BUILD)/card-fixture.o \
+	$(CC) $(POSIX_LAYER_FLAGS) -Wl,--wrap=calloc -Itests tests/test_posix_card.c desktop/posix.c $(BUILD)/card-fixture.o \
 	    $(BUILD)/card-media-io.o $(foreach f,$(MEDIA_CORE),$(BUILD)/card-$(notdir $(f:.c=.o))) -o $@
 
 $(BUILD)/test-media-transfer-browser: tests/tikuos/test_media_transfer_browser.c tests/tikuos/test_media.c platform/tikuos/media.c platform/tikuos/media_io.c $(MEDIA_CORE) $(TIKUOS_ROOT)/services/storage/tiku_media_transfer.c $(TIKUOS_ROOT)/services/storage/tiku_media_transfer.h $(HOST) $(PRODUCT) $(HEADERS) mk/tikuos-test.mk | $(BUILD)
