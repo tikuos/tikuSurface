@@ -44,10 +44,8 @@
 /* The stack of the desktop's job thread (TIKU_WORK_WORKERS in
  * desktop/desktop.mk), from compat/posix.  The deepest frame a job reaches
  * is emptying the Trash, fop_fs_empty_trash()'s 280,640 bytes, which leaves
- * 112,576 bytes of this stack for the rest of its chain.  The stack comes
- * out of the heap, which is the RAM home's free space as statvfs() reports
- * it.  Painted as the desktop's is; the status line reports its deepest
- * use. */
+ * 112,576 bytes of this stack for the rest of its chain.  The job stack uses desktop heap memory. The status
+ * line reports its peak use from its stack paint. */
 #define JOBS_BYTES (384u * 1024u)
 /* Stages for the settings files the store group writes: three, so a save's
  * temporary, the session file's and a direct writer each have one. */

@@ -176,6 +176,12 @@ int main(void)
 
     /* The card mounted read-write, its own size, its folders listed. */
     assert(slurp("/proc/self/mounts", buf, sizeof buf) > 0 && strstr((char *)buf, "/Card mfs rw") != NULL);
+    assert(statvfs("/", &sv) == -1 && errno == ENOTSUP);
+    {
+        int fd = _open("/proc/self/mounts", O_RDONLY, 0);
+        assert(fd >= 0 && fstatvfs(fd, &sv) == -1 && errno == ENOTSUP);
+        assert(_close(fd) == 0);
+    }
     assert(statvfs("/Card", &sv) == 0 && sv.f_blocks == 64u * 256u && sv.f_bfree < sv.f_blocks &&
            sv.f_namemax == 63u);
     /* Tracker asks every volume's space whenever it looks at the volumes:

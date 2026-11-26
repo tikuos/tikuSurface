@@ -3397,13 +3397,9 @@ static int utimensat_locked(int dirfd, const char *path, const struct timespec t
     return 0;
 }
 
-/** @brief The space of the volume that holds node @p n, into @p sv: the
- *  card's for a card node, the heap's for any other.  0, or -1 with errno
- *  set when the card does not answer. */
+/** @brief Return backing volume capacity, or ENOTSUP for a synthetic node. */
 static int statvfs_node(const rnode_t *n, struct statvfs *sv)
 {
-    size_t used, total;
-
     if (n->card != NULL) {
         /* The card's own space: its volume, and what its writers may use. */
         uint64_t now = surface_desktop_now_us();
@@ -3430,13 +3426,8 @@ static int statvfs_node(const rnode_t *n, struct statvfs *sv)
         sv->f_namemax = CARD_NAME - 1u;
         return 0;
     }
-    surface_os_desktop_heap_use(&used, &total, NULL, NULL);
-    memset(sv, 0, sizeof *sv);
-    sv->f_bsize = sv->f_frsize = 4096;
-    sv->f_blocks = total / 4096u;
-    sv->f_bfree = sv->f_bavail = (total - used) / 4096u;
-    sv->f_namemax = NAME_MAX_BYTES - 1;
-    return 0;
+    errno = ENOTSUP;
+    return -1;
 }
 
 static int statvfs_locked(const char *path, struct statvfs *sv)
