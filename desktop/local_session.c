@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "local_programs.h"
+#include "terminal.h"
 #include "bridge_os.h"
 #include "tiku_remote.h"
 #include <string.h>
@@ -29,6 +30,7 @@ int tiku_remote_listen(tiku_remote_listener_t *listener)
     listener->fd = -1;
     int generation = surface_program_attach(&buffers);
     if (generation < 0) return -1;
+    surface_terminal_bind(listener);
     void *token = (void *)(uintptr_t)generation;
     if (tiku_remote_attach(listener, reply, token) &&
         reply(token, TIKU_RMSG_WELCOME, invite, sizeof invite)) return 0;
@@ -39,6 +41,8 @@ int tiku_remote_listen(tiku_remote_listener_t *listener)
 void tiku_remote_shutdown(tiku_remote_listener_t *listener)
 {
     tiku_remote_session_t *s = &listener->session[0];
+    surface_terminal_bind(NULL);
+    surface_terminal_stop();
     if (s->used) surface_program_detach((int)(uintptr_t)s->packet_ctx);
     tiku_remote_detach(s);
 }
@@ -55,7 +59,7 @@ int tiku_remote_poll(tiku_remote_listener_t *listener)
 {
     unsigned char packet[SURFACE_PROGRAM_MTU];
     tiku_remote_session_t *s = &listener->session[0];
-    int changed = 0;
+    int changed = surface_terminal_poll();
     if (resetting) {
         tiku_remote_shutdown(listener);
         resetting = 0;

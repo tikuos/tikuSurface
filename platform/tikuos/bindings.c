@@ -87,6 +87,7 @@ TIKU_PROCESS_THREAD(surface_process, ev, data)
 #if SURFACE_NATIVE_DESKTOP
 #include "tiku_gui.h"
 #include "tiku_draw_program.h"
+#include "../../desktop/terminal.h"
 extern struct tiku_process gui_demo_process;
 
 static void form_exited(const tiku_process_observation_t *r, void *unused)
@@ -95,6 +96,7 @@ static void form_exited(const tiku_process_observation_t *r, void *unused)
     if (r->transition != TIKU_PROCESS_EXITING) return;
     if (r->process == &gui_demo_process) tiku_gui_remove_owner(r->process);
     tiku_draw_program_exited(r->process);
+    surface_terminal_exited(r->process);
 }
 #endif
 

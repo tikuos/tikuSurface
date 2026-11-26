@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "surface_internal.h"
+#include "touch_key.h"
 #include "tiku_ui.h"
 #include "tiku_font.h"
 #include "tiku_word_model.h"
@@ -29,15 +30,6 @@ static tiku_rect_t rect(int id)
     if(id==KEY_RIGHT) return (tiku_rect_t){552,396,72,44};
     if(id==KEY_ACCEPT) return (tiku_rect_t){632,396,144,44};
     return (tiku_rect_t){0};
-}
-/** @brief Return one ASCII key from the letters or symbols page. */
-static char character(int index,int symbols,int shift)
-{
-    static const char letters[]="1234567890qwertyuiopasdfghjkl.zxcvbnm-_@";
-    static const char punctuation[]="!@#$%^&*()[]{}<>/\\|?+=:;\"'`~_,1234567890";
-    char c=symbols?punctuation[index]:letters[index];
-    if(shift && c>='a' && c<='z') c=(char)(c-'a'+'A');
-    return c;
 }
 /** @brief Find a touch key; field selection is routed separately. */
 static int hit(int x,int y)
@@ -184,7 +176,7 @@ static void action(surface_t *s,int id)
 {
     tiku_input_event_t event={.type=TIKU_EVENT_KEY_DOWN};
     if(id>=KEY_CHARACTER && id<KEY_CHARACTER+40) {
-        event.text[0]=character(id-KEY_CHARACTER,s->text_symbols,s->text_shift);
+        event.text[0]=surface_touch_key(id-KEY_CHARACTER,s->text_symbols,s->text_shift);
         event.key=(unsigned char)event.text[0];
     } else switch(id) {
     case KEY_ALL: event.key='a';event.modifiers=TIKU_MOD_CMD;break;
@@ -295,7 +287,7 @@ void surface_text_paint(tiku_surface_t *s,const surface_view_t *v)
         tiku_rect_t r=rect(id);if(!r.w) continue;
         if(r.y>=s->clip.y+s->clip.h || r.y+r.h<=s->clip.y) continue;
         char label[2]={0};const char *value;
-        if(id<KEY_CHARACTER+40) {label[0]=character(id-KEY_CHARACTER,v->text_symbols,v->text_shift);value=label;}
+        if(id<KEY_CHARACTER+40) {label[0]=surface_touch_key(id-KEY_CHARACTER,v->text_symbols,v->text_shift);value=label;}
         else value=labels[id-KEY_ALL];
         unsigned state=v->text_pressed==id || (id==KEY_SHIFT && v->text_shift)||(id==KEY_SYMBOLS && v->text_symbols)?TIKU_S_PRESSED:0;
         tiku_ui_button(s,r,value,state);

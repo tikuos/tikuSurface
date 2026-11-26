@@ -9,6 +9,7 @@
 #include "tiku_posix.h"
 #include <fcntl.h>
 #include "tiku_app_product.h"
+#include "terminal.h"
 #include "tiku_image_window.h"
 #include "tiku_trk_builtin.h"
 /* TikuImage's viewer, made at its first open and kept while its window
@@ -74,6 +75,8 @@ const tiku_trk_builtin_t *tiku_trk_builtins(int *count)
     static const tiku_trk_builtin_t list[] = {
         {"camera", "Camera", "image/png,image/jpeg,image/bmp,image/x-ms-bmp",
          "image_viewer", "graphics", camera_entry, camera_tick, NULL},
+        {.id = "terminal", .name = TIKU_PRODUCT_TERMINAL_NAME, .icon = "terminal",
+         .category = "utilities", .start = surface_terminal_start},
         {.id = "basic-counter", .name = "BASIC Counter", .icon = "calculator",
          .category = "utilities", .start = basic_start},
     };

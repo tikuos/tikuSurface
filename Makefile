@@ -95,3 +95,29 @@ test-services: sdk-host
 .PHONY: test-cpu-clock
 test-cpu-clock:
 	TIKUOS_ROOT="$(TIKUOS_ROOT)" $(PYTHON) tests/tikuos/test_cpu_clock.py
+
+# Cross-check local sessions against the Unix decoder and Terminal's PTY.
+DESKTOP_FOUNDATION ?= $(CURDIR)/foundation
+SESSION_HOST_BUILD ?= $(CURDIR)/build/native-session
+.PHONY: test-native-session
+test-native-session:
+	test -n "$(DESKTOP_ASSETS)"
+	$(MAKE) -C "$(DESKTOP_ASSETS)" BUILD="$(SESSION_HOST_BUILD)" \
+	    FOUNDATION_ROOT="$(DESKTOP_FOUNDATION)" "$(SESSION_HOST_BUILD)/tests/test_terminal" \
+	    "$(SESSION_HOST_BUILD)/tests/test_remote_close"
+	"$(SESSION_HOST_BUILD)/tests/test_terminal"
+	"$(SESSION_HOST_BUILD)/tests/test_remote_close"
+	$(CC) -std=gnu11 -D_DEFAULT_SOURCE -g -fsanitize=address,undefined \
+	    $(addprefix -I$(DESKTOP_FOUNDATION)/kits/,support device storage interface translation application media) \
+	    -DTIKU_APP_EMBED=1 -DTIKU_TERM_EXTERNAL_STREAM=1 -Idesktop \
+	    -I"$(DESKTOP_ASSETS)/apps/shared" -I"$(DESKTOP_ASSETS)/kits/translation" tests/test_native_terminal.c \
+	    desktop/terminal.c "$(DESKTOP_FOUNDATION)/packages/apps/apps/terminal/tiku_term.c" \
+	    -Wl,--start-group "$(SESSION_HOST_BUILD)"/lib/*.a -Wl,--end-group -lm -pthread \
+	    -o "$(SESSION_HOST_BUILD)/tests/test_native_terminal"
+	"$(SESSION_HOST_BUILD)/tests/test_native_terminal"
+	$(CC) -std=gnu11 -D_DEFAULT_SOURCE -g -fsanitize=address,undefined \
+	    $(addprefix -I$(DESKTOP_FOUNDATION)/kits/,support device storage interface translation application media) \
+	    "$(DESKTOP_FOUNDATION)/tests/kits/test_remote_packets.c" \
+	    -Wl,--start-group "$(SESSION_HOST_BUILD)"/lib/*.a -Wl,--end-group -lm -pthread \
+	    -o "$(SESSION_HOST_BUILD)/tests/test_remote_packets"
+	"$(SESSION_HOST_BUILD)/tests/test_remote_packets"

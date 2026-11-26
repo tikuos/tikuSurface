@@ -34,6 +34,9 @@ int main(void)
     assert(surface_os_console_interrupt(bridge)&&count==1&&injected[0]==3);
     owner=0;assert(surface_os_console_write(bridge,"x",1)==-1&&!surface_os_console_close(bridge));owner=1;
     assert(surface_os_console_close(bridge)&&backend==&tiku_shell_io_uart);
+    assert(surface_os_console_open_cap(bridge, 0x82));
+    assert(backend->cap == 2 && backend->flags == tiku_shell_io_uart.flags);
+    assert(surface_os_console_close(bridge) && backend == &tiku_shell_io_uart && backend->cap == 7);
     assert(surface_os_console_write(bridge,"x",1)==-1);assert(surface_os_console_open(other));
     static const tiku_shell_io_t foreign={uart,NULL,NULL,0,0};backend=&foreign;
     assert(surface_os_console_read(other,output,1,&lost)==-1&&surface_os_console_close(other)&&backend==&foreign);

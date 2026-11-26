@@ -25,6 +25,7 @@
 #include "../platform/tikuos/camera.h"
 #include "board.h"
 #include "gesture.h"
+#include "tiku_event.h"
 #include "tiku_trk_deskbar.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -656,6 +657,32 @@ static void post(tiku_event_type_t type, int x, int y, uint64_t now)
         .type = type, .button = 1, .x = x, .y = y,
         .time_us = now > INT64_MAX ? INT64_MAX : (int64_t)now };
     b->event_head = head + 1u;
+}
+
+int surface_runtime_keys(const char *text, size_t length)
+{
+    surface_desktop_bridge_t *bridge = &surface_desktop_bridge;
+    unsigned head = bridge->event_head;
+    if (!rt.running || !length || length > SURFACE_DESKTOP_EVENTS ||
+        head - bridge->event_tail > SURFACE_DESKTOP_EVENTS - length) return 0;
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c != 3 && c != '\r' && (c < 32 || c > 126)) return 0;
+    }
+    for (size_t i = 0; i < length; i++) {
+        unsigned char c = (unsigned char)text[i];
+        tiku_input_event_t key = {.type = TIKU_EVENT_KEY_DOWN, .key = c,
+                                  .time_us = (int64_t)surface_os_time()};
+        if (c == '\r') key.key = TIKU_KEY_RETURN;
+        else if (c == 3) {
+            key.key = 'c';
+            key.modifiers = TIKU_MOD_CMD;
+        } else key.text[0] = (char)c;
+        bridge->events[(head + i) % SURFACE_DESKTOP_EVENTS] = key;
+    }
+    __atomic_store_n(&bridge->event_head, head + (unsigned)length, __ATOMIC_RELEASE);
+    surface_os_desktop_wake();
+    return 1;
 }
 
 static void release(uint64_t now);

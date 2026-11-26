@@ -14,6 +14,8 @@ size_t surface_os_console_size(void);
 void surface_os_console_init(void *);
 /** @brief Claim the UART-backed shell and mirror its output; owner context only. */
 int surface_os_console_open(void *);
+/** Claim the UART-backed shell with the intersection of its and the caller's authority. */
+int surface_os_console_open_cap(void *, unsigned char cap);
 /** @brief Cancel this console input and restore its previous output backend. */
 int surface_os_console_close(void *);
 /** @brief Copy at most 256 input bytes into the console injection queue. */

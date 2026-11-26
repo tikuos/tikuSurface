@@ -55,18 +55,25 @@ describes.
 | Profiler samples | Reads a worker's saved context from the thread control block, `surface_os_desktop_sample()` | The kernel has no call for it | A kernel sampling call |
 | SD card files | `/Card` and `/home` as card trees in `desktop/posix.c`: a writer's bytes held in the node and published whole, up to 64 KiB, through the media store's replacement; a larger file streamed into a hidden object and renamed over the file at its close (`RENAME_OVER`), an interrupted one removed (`DISCARD`); renames and deletes one object at a time, a folder's hidden `.folder` placeholder | TikuOS's POSIX library has no media-store group; its store group covers `/data` | A media-store group in `compat/posix` over the same requests |
 
-## Not reached by the native desktop
+## Local programs and the shell
 
-The kernel's processes and shell, the network and programs that open
-windows on a desktop are not visible to the native desktop; of the
-namespace's nodes, only the reviewed settings and `/data`'s files are
-written. Starting a program is refused: `execvp` returns `ENOSYS`,
-and `fork` reaches libnosys's `_fork`, which does the same. Remote sessions are
-answered as absent (`desktop/absent.c`).
-The core image's shell reaches the namespace, the process table, the kernel's
-shell, BASIC jobs, Wi-Fi status and card writes through `vfs_io.c`,
-`process_io.c`, `console_io.c`, `services.c` and `media.c` in
-`platform/tikuos/`; the native image links none of them.
+The native desktop opens registered program windows through Stomme's packet
+session. The numbered BASIC counter owns its window. The C form publishes
+its controls under `/gui/demo`. Terminal runs Stomme's grid, VT100 parser
+and menus in the desktop worker. Its second local window session carries
+keyboard and menu events. A kernel process owns the shell capture and
+restores the previous console on close or process exit. The capture takes
+the intersection of the desktop and UART capabilities.
+
+The connected profile selects DNS, SNTP and the kernel's `ntp` command.
+Tracker reads the board manifest and exposes the Wi-Fi controls it lists.
+Scan, disconnect and staged profile SSID, authentication and connect go
+through the compatibility library and the kernel capability check.
+Credential values remain hidden. The local profile omits the radio nodes.
+
+Child processes and dynamically installed desktop applications need a
+process loader. The current image starts its linked applications through
+the Deskbar. `execvp` and `fork` return `ENOSYS`.
 
 ## Checks
 

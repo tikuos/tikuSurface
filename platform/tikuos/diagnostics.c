@@ -8,6 +8,7 @@
 #if SURFACE_NATIVE_DESKTOP
 #include "../../desktop/local_programs.h"
 #include <kernel/process/tiku_process.h>
+extern struct tiku_process terminal_process;
 extern struct tiku_process draw_program_process;
 extern struct tiku_process gui_demo_process;
 #endif
@@ -149,12 +150,25 @@ static int control_write(const char *text, size_t length)
 #if SURFACE_NATIVE_DESKTOP
     if (length > 5 && !memcmp(text, "exit=", 5)) {
         struct tiku_process *process = NULL;
+        if (length == 13 && !memcmp(text + 5, "terminal", 8)) process = &terminal_process;
         if (length == 10 && !memcmp(text + 5, "basic", 5)) process = &draw_program_process;
         if (length == 9 && !memcmp(text + 5, "demo", 4)) process = &gui_demo_process;
         if (!process || !tiku_process_is_running(process)) return TIKU_VFS_EINVAL;
         tiku_process_exit(process);
         return TIKU_VFS_OK;
     }
+    if (length > 5 && !memcmp(text, "line=", 5)) {
+        char keys[60];
+        memcpy(keys, text + 5, length - 5);
+        keys[length - 5] = '\r';
+        return surface_runtime_keys(keys, length - 4) ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    }
+    if (length > 5 && !memcmp(text, "type=", 5))
+        return surface_runtime_keys(text + 5, length - 5) ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 10 && !memcmp(text, "key=return", 10))
+        return surface_runtime_keys("\r", 1) ? TIKU_VFS_OK : TIKU_VFS_EIO;
+    if (length == 13 && !memcmp(text, "key=interrupt", 13))
+        return surface_runtime_keys("\003", 1) ? TIKU_VFS_OK : TIKU_VFS_EIO;
     if (length == 9 && !memcmp(text, "reconnect", 9)) {
         surface_program_reconnect();
         return TIKU_VFS_OK;

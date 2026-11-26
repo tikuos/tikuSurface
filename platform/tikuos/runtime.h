@@ -33,6 +33,7 @@ int surface_runtime_input_stats(surface_input_stats_t *);
  * want of reports; then the position and the milliseconds since the line
  * before. Returns the text's length, 0 without a desktop runtime.
  */
+int surface_runtime_keys(const char *text, size_t length);
 int surface_runtime_touch_log(char *buffer, size_t capacity);
 /** @brief Reserved UI PSRAM, including pixels, app allowance and pool metadata. */
 #ifndef SURFACE_DESKTOP

@@ -37,7 +37,7 @@ DESKTOP_ARCH ?= -march=rv32imafc_zicsr_zifencei -mabi=ilp32f
 # Bounds the shared shell sizes for a desktop computer, set for the panel's
 # PSRAM: entries per folder view, the largest state file an update reads,
 # the native settings table, the resource registry's providers, and the
-# remote sessions for board programs, and the
+# remote sessions for board programs and Terminal, and the
 # notices one batch holds (an event list is a stack local).  A desktop
 # started on a fresh home holds 31 native entries and 52 providers.  The
 # settings files are polled for outside edits every 5 s instead of 0.5 s,
@@ -72,7 +72,7 @@ DESKTOP_FORMAT_CFLAGS := -Werror=format -Wno-error=format-truncation
 
 # Windows of Stomme's applications linked into the desktop, which opens
 # them in its own workspace (desktop/builtins.c lists them).
-DESKTOP_APP_SRCS := apps/image/tiku_image_window.c
+DESKTOP_APP_SRCS := apps/image/tiku_image_window.c apps/terminal/tiku_term.c
 DESKTOP_APP_INCLUDES := -I$(F)/packages/apps/apps/image -I$(F)/packages/apps/apps/shared \
     -I$(DESKTOP_ASSETS)/apps/shared
 
@@ -104,6 +104,7 @@ $(DESKTOP_BUILD)/shell/system/shared/shell/tiku_trk_launcher.o: private DESKTOP_
 $(DESKTOP_BUILD)/shell/%.o: $(F)/packages/shell/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_FORMAT_CFLAGS) $(DESKTOP_EXTRA) -MMD -MP -c -o $@ $<
+$(DESKTOP_BUILD)/apps/apps/terminal/tiku_term.o: private DESKTOP_CFLAGS += -DTIKU_TERM_EXTERNAL_STREAM=1 -DTIKU_APP_EMBED=1 -DTIKU_TERM_ROWS=20
 $(DESKTOP_BUILD)/apps/%.o: $(F)/packages/apps/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_APP_INCLUDES) $(DESKTOP_FORMAT_CFLAGS) -MMD -MP -c -o $@ $<

@@ -40,12 +40,16 @@ static int get(void){return -1;}
 
 size_t surface_os_console_size(void){return sizeof(console_t);}
 void surface_os_console_init(void *p){if(p)memset(p,0,sizeof(console_t));}
-int surface_os_console_open(void *p)
+int surface_os_console_open_cap(void *p, unsigned char cap)
 {
     if(!p||!surface_os_in_owner()||active||tiku_shell_io_get_backend()!=&tiku_shell_io_uart)return 0;
     console_t *s=p;s->head=s->tail=s->lost=0;s->previous=tiku_shell_io_get_backend();active=s;
-    s->backend=(tiku_shell_io_t){put,ready,get,s->previous->flags,s->previous->cap};
+    s->backend=(tiku_shell_io_t){put,ready,get,s->previous->flags,s->previous->cap & cap};
     tiku_shell_io_set_backend(&s->backend);return 1;
+}
+int surface_os_console_open(void *p)
+{
+    return surface_os_console_open_cap(p, UCHAR_MAX);
 }
 int surface_os_console_interrupt(void *p)
 {
