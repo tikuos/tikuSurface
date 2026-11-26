@@ -4323,22 +4323,15 @@ void surface_desktop_selftest(void)
     }
 }
 
-void surface_desktop_hash_poll(void)
+void surface_desktop_hash_file(const char *path)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    unsigned token = b->hash_token;
     unsigned char digest[32], *bytes = NULL;
-    char path[sizeof b->hash_path];
     size_t total = 0, cap = 0, n;
     FILE *f;
 
-    if (token == b->hash_done) return;
-    memcpy(path, b->hash_path, sizeof path);
-    path[sizeof path - 1u] = '\0';
     f = fopen(path, "rb");
     if (f == NULL) {
         fprintf(stderr, "hash %s: errno=%d\n", path, errno);
-        b->hash_done = token;
         return;
     }
     for (;;) {
@@ -4359,5 +4352,4 @@ void surface_desktop_hash_poll(void)
     fprintf(stderr, "hash %s: bytes=%lu sha256=", path, (unsigned long)total);
     for (int k = 0; k < 32; k++) fprintf(stderr, "%02x", digest[k]);
     fprintf(stderr, "\n");
-    b->hash_done = token;
 }

@@ -4,7 +4,7 @@
  *
  * The desktop runs TikuDesktop's shell on a TikuOS worker thread.  The
  * kernel-side runtime owns the panel, touch and presentation; the two meet
- * through the input ring, the frame handoff and the log ring declared here.
+ * through kernel calls. The log ring carries output from the desktop.
  * The firmware calls both sides use are declared in bridge_os.h.
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,55 +24,11 @@
 
 /** @brief State shared by the desktop thread and the kernel runtime. */
 typedef struct {
-    tiku_input_event_t events[SURFACE_DESKTOP_EVENTS];
-    volatile unsigned event_head, event_tail;   /* kernel writes head */
-    const tiku_surface_t *volatile frame;       /* desktop hands a frame */
-    tiku_rect_t frame_damage;
-    volatile uint64_t frame_token, done_token;  /* done follows the panel */
-    /* frame_token when the desktop took the last down event, set before
-     * down_taken: a frame with a later token was drawn after the press. */
-    volatile uint64_t down_token;
-    volatile int down_taken;
-    volatile int frame_result;
     char log[SURFACE_DESKTOP_LOG];
     volatile unsigned log_head, log_tail;       /* desktop writes head */
     volatile int exited, exit_code;
     volatile uint32_t frames, waits, turns;
-    /* One SD card request at a time: the desktop points card at it and
-     * bumps card_token; the kernel submits and polls it, then sets
-     * card_done to that token. */
-    surface_media_io_t *volatile card;
-    volatile unsigned card_token, card_done;
-    volatile int card_foreground;               /* the desktop thread asked */
-    volatile int card_mounted;                  /* the kernel mounted it */
-    char hash_path[64];                          /* a file to hash, or "" */
-    volatile unsigned hash_token, hash_done;
-    /* One touch map request at a time: the desktop sets map_kind, and for
-     * a fit map_edge, and bumps map_token; the kernel answers in map_result
-     * and sets map_done to that token. */
-    volatile int map_kind;                      /* SURFACE_MAP_* */
-    int map_edge[4];                            /* left, right, top, bottom */
-    volatile int map_result;                    /* 0, or -1 when refused */
-    volatile unsigned map_token, map_done;
-    /* One camera request at a time: the desktop sets cam_kind and its
-     * buffers and bumps cam_token; the kernel runs it over its turns,
-     * answers in cam_result, and for an encode cam_len, and sets cam_done
-     * to that token. */
-    volatile int cam_kind;                      /* SURFACE_CAM_* */
-    void *cam_frame;                            /* a UYVY frame's buffer */
-    uint8_t *cam_out;                           /* an encode's output */
-    uint32_t cam_cap, cam_quality;
-    volatile uint32_t cam_len;
-    volatile int cam_result;                    /* SURFACE_CAMERA_* */
-    volatile unsigned cam_token, cam_done;
-    /* The newest streamed picture: its number, from 1, times two plus the
-     * half of cam_frame that holds it, the cache's copy of that half
-     * dropped; 0 when none streams.  The kernel's turns keep it and wake
-     * the desktop when it changes. */
-    volatile uint32_t cam_picture;
-    /* The pictures the desktop has drawn and the last one's microseconds,
-     * for the status line. */
-    volatile uint32_t cam_drawn, cam_draw_us;
+    int card_mounted;                           /* fixed at desktop startup */
 } surface_desktop_bridge_t;
 
 /** @brief What the desktop asks of the touch map. */
@@ -94,6 +50,16 @@ enum {
 
 /** @brief The one bridge, owned by desktop/runtime.c. */
 extern surface_desktop_bridge_t surface_desktop_bridge;
+
+/** @brief Present a damaged region and wait for the panel to release its pixels. */
+int surface_desktop_present(const tiku_surface_t *surface, tiku_rect_t damage);
+/** @brief Input readiness predicate for the desktop wait queue. */
+int surface_desktop_input_ready(void *unused);
+/** @brief Take the next input event, coalescing consecutive pointer moves. */
+int surface_desktop_input(tiku_input_event_t *event);
+#define SURFACE_HASH_PATH_BYTES 64u
+/** @brief Read and hash the named file on the desktop worker. */
+void surface_desktop_hash_file(const char *path);
 
 /* Desktop-thread side, desktop/host.c and desktop/posix.c. */
 /** @brief Append bytes to the log ring; the desktop thread waits for room,

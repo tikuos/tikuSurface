@@ -49,7 +49,7 @@ capture: host
 
 .PHONY: test-tikuos
 test-tikuos: sdk-host
-	$(MAKE) -f mk/tikuos-test.mk diagnostics-test
+	$(MAKE) -f mk/tikuos-test.mk diagnostics-test desktop-requests-test
 
 .PHONY: test-display
 test-display:

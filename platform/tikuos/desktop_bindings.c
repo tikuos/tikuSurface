@@ -46,6 +46,11 @@ int surface_os_desktop_start(void (*entry)(void *), void *arg, void *stack, size
     return tiku_thread_start(&desktop_worker, entry, arg);
 }
 
+int surface_os_desktop_call(int (*fn)(void *), void *context)
+{
+    return tiku_thread_call(fn, context);
+}
+
 void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us)
 {
     unsigned long ticks = 0;

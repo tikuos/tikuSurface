@@ -214,9 +214,87 @@ int surface_runtime_stacks(void)
     return 1;
 }
 
+typedef struct {
+    const tiku_surface_t *surface;
+    tiku_rect_t damage;
+    int result, done;
+} frame_request_t;
+
+typedef struct {
+    surface_media_io_t *io;
+    int foreground, done;
+} card_request_t;
+
+typedef struct {
+    int kind;
+    void *frame;
+    uint8_t *out;
+    uint32_t cap, quality;
+} camera_request_t;
+
+typedef struct {
+    int kind;
+    const int *edge;
+    int result, done;
+} map_request_t;
+
+/* The kernel admits requests and advances drivers on the surface process turn.
+ * A waiting caller retains its request and buffers through completion. */
+static struct {
+    frame_request_t *frame;
+    uint64_t serial, down_serial;
+    int down_taken;
+    tiku_input_event_t events[SURFACE_DESKTOP_EVENTS];
+    unsigned head, tail;
+    card_request_t *card;
+    map_request_t *map;
+    camera_request_t camera;
+    void *stream_buffer;
+    int cam_started, cam_opened, cam_result;
+    uint32_t cam_len, picture, drawn, draw_us;
+    char hash_path[SURFACE_HASH_PATH_BYTES];
+    int hash_ready;
+} devices;
+
+static int request_done(void *arg)
+{
+    return __atomic_load_n((int *)arg, __ATOMIC_ACQUIRE);
+}
+
+static void wait_request(int *done)
+{
+    while (!request_done(done)) surface_os_desktop_wait(request_done, done, 0);
+}
+
+static int submit_frame(void *arg)
+{
+    if (devices.frame) return -1;
+    devices.frame = arg;
+    if (++devices.serial == 0) devices.serial++;
+    surface_os_desktop_kick();
+    return 0;
+}
+
+int surface_desktop_present(const tiku_surface_t *surface, tiku_rect_t damage)
+{
+    frame_request_t request = {.surface = surface, .damage = damage};
+    if (surface_os_desktop_call(submit_frame, &request) < 0) return -1;
+    wait_request(&request.done);
+    return request.result;
+}
+
+static void release_frame(int result)
+{
+    frame_request_t *request = devices.frame;
+    devices.frame = NULL;
+    request->result = result;
+    __atomic_store_n(&request->done, 1, __ATOMIC_RELEASE);
+    surface_os_desktop_wake();
+}
+
 /* The SD card's queued media bridge: one request runs at a time. */
 static _Alignas(8) unsigned char card_bridge[SURFACE_MEDIA_BRIDGE_BYTES];
-static unsigned card_submitted;   /* the token submitted to the bridge, or 0 */
+static int card_submitted;
 static uint64_t card_began;       /* when the pending request was first seen */
 static uint32_t card_requests, card_polls, card_last_us, card_max_us; /* for the status line */
 static uint64_t card_total_us;    /* time all finished requests took */
@@ -226,9 +304,7 @@ static uint64_t card_total_us;    /* time all finished requests took */
 /** @brief Whether a card request waits for the kernel. */
 static int card_pending(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-
-    return b->card != NULL && b->card_token != b->card_done;
+    return devices.card != NULL;
 }
 
 /** @brief Whether the pending card request may have the processor: the
@@ -239,28 +315,19 @@ static int card_pending(void)
  *  frames it brings come first. */
 static int card_urgent(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-
-    if (b->card_foreground) return 1;
+    if (devices.card->foreground) return 1;
     return surface_os_desktop_blocked() && rt.presenting == 0u &&
-           b->frame_token == b->done_token;
+           devices.frame == NULL;
 }
 
 /** @brief Advance the desktop's card request by one bridge phase; nonzero
  *  when it finished.  A busy queue is retried on a later turn. */
 static int card_step(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    surface_media_io_t *io = b->card;
-    unsigned token = b->card_token;
-
-    if (!card_pending()) return 0;
-    if (!b->card_mounted) {
-        io->result = SURFACE_MEDIA_UNAVAILABLE;
-        b->card_done = token;
-        return 1;
-    }
-    if (card_submitted != token) {
+    card_request_t *request = devices.card;
+    if (!request) return 0;
+    surface_media_io_t *io = request->io;
+    if (!card_submitted) {
         int r;
 
         if (card_began == 0) card_began = surface_os_time();
@@ -269,10 +336,12 @@ static int card_step(void)
         if (r == SURFACE_MEDIA_BUSY) return 0;
         if (r != SURFACE_MEDIA_OK) {
             io->result = r;
-            b->card_done = token;
+            devices.card = NULL;
+            card_began = 0;
+            __atomic_store_n(&request->done, 1, __ATOMIC_RELEASE);
             return 1;
         }
-        card_submitted = token;
+        card_submitted = 1;
     }
     card_polls++;
     if (!surface_os_media_poll(card_bridge)) return 0;
@@ -286,7 +355,8 @@ static int card_step(void)
     card_total_us += card_last_us;
     if (card_last_us > card_max_us) card_max_us = card_last_us;
     card_began = 0;
-    b->card_done = token;
+    devices.card = NULL;
+    __atomic_store_n(&request->done, 1, __ATOMIC_RELEASE);
     return 1;
 }
 
@@ -295,11 +365,12 @@ static uint32_t samples[SAMPLE_SLOTS];
 
 uint64_t surface_desktop_now_us(void) { return surface_os_time(); }
 
-/** @brief Whether the kernel has finished the desktop's card request. */
-static int card_finished(void *context)
+static int submit_card(void *arg)
 {
-    (void)context;
-    return surface_desktop_bridge.card_done == surface_desktop_bridge.card_token;
+    if (!surface_desktop_bridge.card_mounted || devices.card) return -1;
+    devices.card = arg;
+    surface_os_desktop_kick();
+    return 0;
 }
 
 /* The desktop thread and its job thread both ask for card requests; the
@@ -350,33 +421,26 @@ void surface_desktop_card(surface_media_io_t *io)
         return;
     }
     (void)pthread_mutex_lock(&card_turn);
-    b->card = io;
-    b->card_foreground = surface_os_in_desktop();
-    b->card_token++;
-    surface_os_desktop_kick();
-    while (!card_finished(NULL)) surface_os_desktop_wait(card_finished, NULL, 1000000u);
+    card_request_t request = {.io = io, .foreground = surface_os_in_desktop()};
+    if (surface_os_desktop_call(submit_card, &request) == 0) wait_request(&request.done);
+    else io->result = SURFACE_MEDIA_UNAVAILABLE;
     (void)pthread_mutex_unlock(&card_turn);
 }
 
-/** @brief Whether the kernel has answered the desktop's touch map request. */
-static int map_finished(void *context)
+static int submit_map(void *arg)
 {
-    (void)context;
-    return surface_desktop_bridge.map_done == surface_desktop_bridge.map_token;
+    if (devices.map) return -1;
+    devices.map = arg;
+    surface_os_desktop_kick();
+    return 0;
 }
 
-/** @brief On the desktop thread: hand the kernel one touch map request and
- *  wait for its answer. */
 static int map_request(int kind, const int *edge)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-
-    b->map_kind = kind;
-    if (edge != NULL) memcpy(b->map_edge, edge, sizeof b->map_edge);
-    b->map_token++;
-    surface_os_desktop_kick();
-    while (!map_finished(NULL)) surface_os_desktop_wait(map_finished, NULL, 1000000u);
-    return b->map_result;
+    map_request_t request = {.kind = kind, .edge = edge};
+    if (surface_os_desktop_call(submit_map, &request) < 0) return -1;
+    wait_request(&request.done);
+    return request.result;
 }
 
 /* The Deskbar clock's standing (TIKU_SHELL_CLOCK_STATE): the kernel's
@@ -406,49 +470,46 @@ int tiku_shell_touch_keep(void) { return map_request(SURFACE_MAP_KEEP, NULL); }
 
 void tiku_shell_touch_revert(void) { (void)map_request(SURFACE_MAP_REVERT, NULL); }
 
-/* The camera request the kernel has started, by token, 0 for none; and
- * whether the sensor is open. */
-static unsigned cam_started;
-static int cam_opened;
-
-int surface_desktop_camera(int kind, void *frame, uint8_t *out, uint32_t cap,
-                           unsigned quality)
+static int submit_camera(void *arg)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-
-    if (b->cam_done != b->cam_token) return -1;
-    b->cam_kind = kind;
-    b->cam_frame = frame;
-    b->cam_out = out;
-    b->cam_cap = cap;
-    b->cam_quality = quality;
-    b->cam_len = 0;
-    b->cam_token++;
+    if (devices.camera.kind) return -1;
+    devices.camera = *(camera_request_t *)arg;
+    devices.cam_len = 0;
     surface_os_desktop_kick();
     return 0;
 }
 
+int surface_desktop_camera(int kind, void *frame, uint8_t *out, uint32_t cap,
+                           unsigned quality)
+{
+    if (kind < SURFACE_CAM_OPEN || kind > SURFACE_CAM_CLOSE) return -1;
+    camera_request_t request = {kind, frame, out, cap, quality};
+    return surface_os_desktop_call(submit_camera, &request);
+}
+
+static int camera_result(void *arg)
+{
+    if (devices.camera.kind) return SURFACE_CAMERA_BUSY;
+    if (arg) *(uint32_t *)arg = devices.cam_len;
+    return devices.cam_result;
+}
+
 int surface_desktop_camera_result(uint32_t *len)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-
-    if (b->cam_done != b->cam_token) return SURFACE_CAMERA_BUSY;
-    if (len) *len = b->cam_len;
-    return b->cam_result;
+    return surface_os_desktop_call(camera_result, len);
 }
 
 uint32_t surface_desktop_camera_picture(unsigned *half)
 {
-    uint32_t picture = surface_desktop_bridge.cam_picture;
-
+    uint32_t picture = __atomic_load_n(&devices.picture, __ATOMIC_ACQUIRE);
     if (half) *half = picture & 1u;
     return picture >> 1;
 }
 
 void surface_desktop_camera_drawn(uint32_t us)
 {
-    surface_desktop_bridge.cam_draw_us = us;
-    surface_desktop_bridge.cam_drawn++;
+    __atomic_store_n(&devices.draw_us, us, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&devices.drawn, 1, __ATOMIC_RELAXED);
 }
 
 /** @brief Advance the desktop's camera request by one turn; nonzero when
@@ -456,52 +517,55 @@ void surface_desktop_camera_drawn(uint32_t us)
  *  the later ones; open and close finish in the turn that starts them. */
 static int camera_step(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    unsigned token = b->cam_token;
     int rc = SURFACE_CAMERA_ERROR;
     uint32_t len = 0;
 
-    if (b->cam_done == token) return 0;
-    if (cam_started != token) {
-        switch (b->cam_kind) {
+    if (!devices.camera.kind) return 0;
+    if (!devices.cam_started) {
+        switch (devices.camera.kind) {
         case SURFACE_CAM_OPEN:
-            rc = cam_opened ? SURFACE_CAMERA_OK : surface_os_camera_open();
-            cam_opened = rc == SURFACE_CAMERA_OK;
-            if (cam_opened) rc = surface_os_camera_stream(b->cam_frame);
+            rc = devices.cam_opened ? SURFACE_CAMERA_OK : surface_os_camera_open();
+            devices.cam_opened = rc == SURFACE_CAMERA_OK;
+            if (devices.cam_opened) rc = surface_os_camera_stream(devices.camera.frame);
             break;
         case SURFACE_CAM_STREAM:
-            if (cam_opened) rc = surface_os_camera_stream(b->cam_frame);
+            if (devices.cam_opened) rc = surface_os_camera_stream(devices.camera.frame);
             break;
         case SURFACE_CAM_CLOSE:
-            if (cam_opened) {
+            if (devices.cam_opened) {
                 (void)surface_os_camera_stream(NULL);
                 surface_os_camera_close();
             }
-            cam_opened = 0;
+            devices.cam_opened = 0;
             rc = SURFACE_CAMERA_OK;
             break;
         case SURFACE_CAM_FRAME:
-            if (cam_opened) rc = surface_os_camera_capture(b->cam_frame);
+            if (devices.cam_opened) rc = surface_os_camera_capture(devices.camera.frame);
             break;
         case SURFACE_CAM_ENCODE:
-            rc = surface_os_camera_encode(b->cam_frame, b->cam_quality, b->cam_out, b->cam_cap);
+            rc = surface_os_camera_encode(devices.camera.frame, devices.camera.quality, devices.camera.out, devices.camera.cap);
             break;
         default:
             break;
         }
         if (rc == SURFACE_CAMERA_BUSY) {
-            cam_started = token;
+            devices.cam_started = 1;
             return 0;
         }
     } else {
-        rc = b->cam_kind == SURFACE_CAM_FRAME ? surface_os_camera_capture_poll() :
+        rc = devices.camera.kind == SURFACE_CAM_FRAME ? surface_os_camera_capture_poll() :
              surface_os_camera_encode_poll(&len);
         if (rc == SURFACE_CAMERA_BUSY) return 0;
-        cam_started = 0;
+        devices.cam_started = 0;
     }
-    b->cam_len = len;
-    b->cam_result = rc;
-    b->cam_done = token;
+    devices.cam_len = len;
+    if (rc == SURFACE_CAMERA_OK && (devices.camera.kind == SURFACE_CAM_OPEN ||
+                                    devices.camera.kind == SURFACE_CAM_STREAM))
+        devices.stream_buffer = devices.camera.frame;
+    if (devices.camera.kind == SURFACE_CAM_CLOSE || devices.camera.kind == SURFACE_CAM_FRAME)
+        devices.stream_buffer = NULL;
+    devices.cam_result = rc;
+    devices.camera.kind = 0;
     return 1;
 }
 
@@ -510,54 +574,57 @@ static int camera_step(void)
  *  to draw it. */
 static int camera_watch(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
     unsigned half = 0;
-    uint32_t n = cam_opened ? surface_os_camera_newest(&half) : 0u;
+    uint32_t n = devices.stream_buffer ? surface_os_camera_newest(&half) : 0u;
     uint32_t picture = n ? n << 1 | half : 0u;
 
-    if (picture == b->cam_picture) return 0;
-    if (n) surface_os_camera_drop(b->cam_frame, half);
-    b->cam_picture = picture;
+    if (picture == __atomic_load_n(&devices.picture, __ATOMIC_RELAXED)) return 0;
+    if (n) surface_os_camera_drop(devices.stream_buffer, half);
+    __atomic_store_n(&devices.picture, picture, __ATOMIC_RELEASE);
     return 1;
+}
+
+static void load_touch_map(void)
+{
+    unsigned char record[SURFACE_SETTINGS_BYTES];
+    size_t length = 0;
+    int result = surface_os_settings_read(record, sizeof record, &length);
+    rt.map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
+    rt.map_status = surface_settings_load(result, record, (unsigned)length, &rt.map);
 }
 
 /** @brief Answer the desktop's touch map request, if one waits: a fit
  *  corrects the map in force and stores nothing, keep stores it, and revert
  *  reads the stored map again, or takes the panel's default without one. */
-static int map_step(void)
+static int apply_map(const map_request_t *request)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    unsigned token = b->map_token;
     surface_touch_map_t next;
-
-    if (b->map_done == token) return 0;
-    switch (b->map_kind) {
+    switch (request->kind) {
     case SURFACE_MAP_FIT:
-        if (surface_touch_map_refit(&rt.map, b->map_edge, &next)) {
+        if (surface_touch_map_refit(&rt.map, request->edge, &next)) {
             rt.map = next;
             rt.map_status = SURFACE_SETTINGS_PENDING;
-            b->map_result = 0;
-        } else {
-            b->map_result = -1;
+            return 0;
         }
-        break;
+        return -1;
     case SURFACE_MAP_KEEP:
-        b->map_result = surface_runtime_calibrate(&rt.map) &&
-                        rt.map_status == SURFACE_SETTINGS_SAVED ? 0 : -1;
-        break;
-    default: {
-        unsigned char record[SURFACE_SETTINGS_BYTES];
-        size_t length = 0;
+        return surface_runtime_calibrate(&rt.map) &&
+               rt.map_status == SURFACE_SETTINGS_SAVED ? 0 : -1;
+    case SURFACE_MAP_REVERT:
+        load_touch_map();
+        return 0;
+    default:
+        return -1;
+    }
+}
 
-        rt.map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
-        rt.map_status = surface_settings_load(
-            surface_os_settings_read(record, sizeof record, &length), record, (unsigned)length,
-            &rt.map);
-        b->map_result = 0;
-        break;
-    }
-    }
-    b->map_done = token;
+static int map_step(void)
+{
+    map_request_t *request = devices.map;
+    if (!request) return 0;
+    devices.map = NULL;
+    request->result = apply_map(request);
+    __atomic_store_n(&request->done, 1, __ATOMIC_RELEASE);
     return 1;
 }
 
@@ -597,15 +664,35 @@ static volatile int report_asked;
 
 int surface_runtime_hash(const char *path, size_t length)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-
-    if (!rt.running || length == 0 || length >= sizeof b->hash_path ||
-        b->hash_token != b->hash_done) return 0;
-    memcpy(b->hash_path, path, length);
-    b->hash_path[length] = '\0';
-    b->hash_token++;
+    if (!rt.running || !path || !length || !path[0] || length >= sizeof devices.hash_path ||
+        devices.hash_path[0]) return 0;
+    memcpy(devices.hash_path, path, length);
+    devices.hash_path[length] = '\0';
+    __atomic_store_n(&devices.hash_ready, 1, __ATOMIC_RELEASE);
     surface_os_desktop_wake();
     return 1;
+}
+
+static int take_hash(void *path)
+{
+    if (!__atomic_exchange_n(&devices.hash_ready, 0, __ATOMIC_ACQ_REL)) return 0;
+    memcpy(path, devices.hash_path, sizeof devices.hash_path);
+    return 1;
+}
+
+static int finish_hash(void *unused)
+{
+    (void)unused;
+    devices.hash_path[0] = '\0';
+    return 0;
+}
+
+void surface_desktop_hash_poll(void)
+{
+    char path[SURFACE_HASH_PATH_BYTES];
+    if (!__atomic_load_n(&devices.hash_ready, __ATOMIC_ACQUIRE) || surface_os_desktop_call(take_hash, path) != 1) return;
+    surface_desktop_hash_file(path);
+    (void)surface_os_desktop_call(finish_hash, NULL);
 }
 
 int surface_runtime_report(void)
@@ -645,26 +732,60 @@ static void drain_log(void)
  *  it is on the panel. */
 static void post(tiku_event_type_t type, int x, int y, uint64_t now)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    unsigned head = b->event_head;
+    unsigned head = devices.head;
 
-    if (head - b->event_tail >= SURFACE_DESKTOP_EVENTS) return;
+    if (head - devices.tail >= SURFACE_DESKTOP_EVENTS) return;
     if (type == TIKU_EVENT_POINTER_DOWN) {
         rt.input_at = now;
-        b->down_taken = 0;
+        devices.down_taken = 0;
     }
-    b->events[head % SURFACE_DESKTOP_EVENTS] = (tiku_input_event_t){
+    devices.events[head % SURFACE_DESKTOP_EVENTS] = (tiku_input_event_t){
         .type = type, .button = 1, .x = x, .y = y,
         .time_us = now > INT64_MAX ? INT64_MAX : (int64_t)now };
-    b->event_head = head + 1u;
+    __atomic_store_n(&devices.head, head + 1u, __ATOMIC_RELEASE);
+}
+
+int surface_desktop_input_ready(void *unused)
+{
+    (void)unused;
+    return __atomic_load_n(&devices.head, __ATOMIC_ACQUIRE) !=
+           __atomic_load_n(&devices.tail, __ATOMIC_ACQUIRE);
+}
+
+static int take_input(void *arg)
+{
+    tiku_input_event_t *event = arg;
+    unsigned tail = devices.tail;
+
+    if (tail == devices.head) return 0;
+    *event = devices.events[tail % SURFACE_DESKTOP_EVENTS];
+    tail++;
+    /* A move with another move queued behind it is dropped for the later
+     * one: the desktop sees where the contact is now, not where it was
+     * while a frame was drawn. */
+    while (event->type == TIKU_EVENT_POINTER_MOVE && tail != devices.head &&
+           devices.events[tail % SURFACE_DESKTOP_EVENTS].type == TIKU_EVENT_POINTER_MOVE) {
+        *event = devices.events[tail % SURFACE_DESKTOP_EVENTS];
+        tail++;
+    }
+    __atomic_store_n(&devices.tail, tail, __ATOMIC_RELEASE);
+    if (event->type == TIKU_EVENT_POINTER_DOWN) {
+        devices.down_serial = devices.serial;
+        devices.down_taken = 1;
+    }
+    return 1;
+}
+
+int surface_desktop_input(tiku_input_event_t *event)
+{
+    return surface_desktop_input_ready(NULL) && surface_os_desktop_call(take_input, event) == 1;
 }
 
 int surface_runtime_keys(const char *text, size_t length)
 {
-    surface_desktop_bridge_t *bridge = &surface_desktop_bridge;
-    unsigned head = bridge->event_head;
+    unsigned head = devices.head;
     if (!rt.running || !length || length > SURFACE_DESKTOP_EVENTS ||
-        head - bridge->event_tail > SURFACE_DESKTOP_EVENTS - length) return 0;
+        head - devices.tail > SURFACE_DESKTOP_EVENTS - length) return 0;
     for (size_t i = 0; i < length; i++) {
         unsigned char c = (unsigned char)text[i];
         if (c != 3 && c != '\r' && (c < 32 || c > 126)) return 0;
@@ -678,9 +799,9 @@ int surface_runtime_keys(const char *text, size_t length)
             key.key = 'c';
             key.modifiers = TIKU_MOD_CMD;
         } else key.text[0] = (char)c;
-        bridge->events[(head + i) % SURFACE_DESKTOP_EVENTS] = key;
+        devices.events[(head + i) % SURFACE_DESKTOP_EVENTS] = key;
     }
-    __atomic_store_n(&bridge->event_head, head + (unsigned)length, __ATOMIC_RELEASE);
+    __atomic_store_n(&devices.head, head + (unsigned)length, __ATOMIC_RELEASE);
     surface_os_desktop_wake();
     return 1;
 }
@@ -793,9 +914,9 @@ int surface_runtime_drag(unsigned x0, unsigned y0, unsigned x1, unsigned y1)
 static void map_point(unsigned rx, unsigned ry, int *x, int *y)
 {
     const surface_touch_map_t *m = &rt.map;
-    uint32_t px = rx < m->x_min ? 0u : rx > m->x_max ? m->x_max - m->x_min : rx - m->x_min;
-    uint32_t py = ry < m->y_min ? 0u : ry > m->y_max ? m->y_max - m->y_min : ry - m->y_min;
     uint32_t dx = m->x_max - m->x_min, dy = m->y_max - m->y_min;
+    uint32_t px = rx < m->x_min ? 0u : rx > m->x_max ? dx : rx - m->x_min;
+    uint32_t py = ry < m->y_min ? 0u : ry > m->y_max ? dy : ry - m->y_min;
 
     if (m->swap) {
         uint32_t t = px; px = py; py = t;
@@ -977,19 +1098,17 @@ int tiku_framebuffer_complete(tiku_framebuffer_t *owner, uint64_t token,
     surface_desktop_bridge_t *b = &surface_desktop_bridge;
     uint64_t now = surface_os_time();
 
-    if (owner != &rt.owner || token != rt.presenting) return 0;
+    if (owner != &rt.owner || !devices.frame || !token || token != rt.presenting) return 0;
     rt.presenting = 0;
-    b->frame_result = result == TIKU_PRESENT_OK ? 0 : -1;
-    b->done_token = token;
     b->frames++;
     rt.frame.completed++;
     rt.frame.frame_us = (uint32_t)(now - rt.frame_started);
     if (rt.frame.frame_us > rt.frame.max_frame_us) rt.frame.max_frame_us = rt.frame.frame_us;
-    if (rt.input_at != 0u && b->down_taken && token > b->down_token) {
+    if (rt.input_at != 0u && devices.down_taken && token > devices.down_serial) {
         rt.input_us = (uint32_t)(now - rt.input_at);
         rt.input_at = 0;
     }
-    surface_os_desktop_wake();
+    release_frame(result == TIKU_PRESENT_OK ? 0 : -1);
     return 1;
 }
 
@@ -1086,25 +1205,23 @@ int surface_runtime_capture(void)
 /** @brief Hand the desktop's waiting frame to the presentation. */
 static void take_frame(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    const tiku_surface_t *s = b->frame;
-    uint64_t token = b->frame_token;
+    frame_request_t *request = devices.frame;
+    uint64_t token = devices.serial;
     tiku_present_view_t view;
 
-    if (rt.presenting || rt.capturing || s == NULL || token == b->done_token) return;
+    if (rt.presenting || rt.capturing || !request) return;
+    const tiku_surface_t *s = request->surface;
     view = (tiku_present_view_t){
         .pixels = s->px, .bytes = (size_t)s->w * (size_t)s->h * 4u,
         .stride = (size_t)s->w * 4u, .width = s->w, .height = s->h,
-        .format = TIKU_PIXELS_XRGB8888, .damage = b->frame_damage,
+        .format = TIKU_PIXELS_XRGB8888, .damage = request->damage,
         .token = token, .owner = &rt.owner };
     rt.frame.requested++;
     rt.frame_started = surface_os_time();
     rt.presenting = token;
     if (surface_presentation_submit(&rt.presentation, &view) != TIKU_PRESENT_OK) {
         rt.presenting = 0;
-        b->frame_result = -1;
-        b->done_token = token;
-        surface_os_desktop_wake();
+        release_frame(-1);
     }
 }
 
@@ -1142,13 +1259,12 @@ void surface_desktop_memory(surface_desktop_memory_t *m)
 int surface_runtime_start(void)
 {
     unsigned char *frames, *span, *stack, *jobs, *stages, *heap;
-    unsigned char record[SURFACE_SETTINGS_BYTES];
-    size_t length = 0;
 
     clear_statics();
     if (rt.running) return 1;
     frames = surface_os_reserve_frames(SURFACE_FRAMES_BYTES);
     if (frames == NULL) return 0;
+    memset(&devices, 0, sizeof devices);
     memset(&surface_desktop_bridge, 0, sizeof surface_desktop_bridge);
     memset(&rt, 0, sizeof rt);
     rt.sample_dump = UINT32_MAX;
@@ -1207,10 +1323,7 @@ int surface_runtime_start(void)
 
         surface_os_desktop_print(line, sizeof line - 1u);
     }
-    rt.map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
-    rt.map_status = surface_settings_load(
-        surface_os_settings_read(record, sizeof record, &length), record, (unsigned)length,
-        &rt.map);
+    load_touch_map();
     rt.input_open = surface_os_input_open(&rt.input_owned);
     if (surface_os_desktop_start(desktop_thread, NULL, stack, STACK_BYTES) != 0) {
         rt.failed = 1;
@@ -1372,8 +1485,8 @@ int surface_runtime_poll(void)
                      " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu ring_lost=%lu"
                      " camera=%lu/%lu/%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
-                     b->event_head, b->event_tail, (unsigned long)b->frame_token,
-                     (unsigned long)b->done_token, rt.presentation.phase,
+                     devices.head, devices.tail, (unsigned long)devices.serial,
+                     (unsigned long)(devices.serial - (devices.frame != NULL)), rt.presentation.phase,
                      (unsigned long)rt.max_turn_us, (unsigned long)used, (unsigned long)total,
                      (unsigned long)refused, (unsigned long)largest,
                      (unsigned long)rt.stack_used, (unsigned long)STACK_BYTES,
@@ -1390,8 +1503,8 @@ int surface_runtime_poll(void)
                      (unsigned long)(card_total_us / 1000u), (unsigned long)mutations,
                      (unsigned long)ppa_jobs, (unsigned long)ppa_failed,
                      (unsigned long)ppa_wakes, (unsigned long)ppa_us, surface_board_lost(),
-                     (unsigned long)(b->cam_picture >> 1), (unsigned long)b->cam_drawn,
-                     (unsigned long)b->cam_draw_us);
+                     (unsigned long)(devices.picture >> 1), (unsigned long)__atomic_load_n(&devices.drawn, __ATOMIC_RELAXED),
+                     (unsigned long)__atomic_load_n(&devices.draw_us, __ATOMIC_RELAXED));
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);
     }
     if (b->exited == 1) {
@@ -1409,7 +1522,6 @@ int surface_runtime_poll(void)
 
 int surface_runtime_continue(void)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
     uint64_t now = surface_os_time();
     /* Conversion and submission continue at once; a frame waiting on the
      * panel's DMA, or a burst past its bound, waits for the timer turn, and
@@ -1419,7 +1531,7 @@ int surface_runtime_continue(void)
         rt.stacks_dump != UINT32_MAX || (card_pending() && card_urgent()) ||
         (rt.presenting != 0 && ((rt.presentation.phase == 1u && !rt.presentation.hw) ||
                                 rt.presentation.phase == 2u)) ||
-         (rt.presenting == 0 && b->frame != NULL && b->frame_token != b->done_token));
+         (rt.presenting == 0 && devices.frame != NULL));
 
     if (!work) {
         rt.burst = 0;

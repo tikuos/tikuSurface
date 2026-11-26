@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** @brief Run a short callback in kernel context and return its result. */
+int surface_os_desktop_call(int (*fn)(void *), void *context);
 /** @brief Start the desktop worker on a caller-owned stack; 0 on success.
  *  @note Kernel owner only. */
 int surface_os_desktop_start(void (*entry)(void *), void *arg, void *stack, size_t bytes);

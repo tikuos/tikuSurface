@@ -41,17 +41,9 @@ void tiku_host_set_fullscreen(tiku_host_t *host, int on) { (void)host; (void)on;
 void tiku_host_set_cursor(tiku_host_t *host, int kind) { (void)host; (void)kind; }
 void tiku_host_set_resize_cursor(tiku_host_t *host, int enabled) { (void)host; (void)enabled; }
 
-/** @brief Whether the panel shows the frame handed over last. */
-static int presented(void *context)
-{
-    (void)context;
-    return surface_desktop_bridge.done_token == surface_desktop_bridge.frame_token;
-}
-
 int tiku_host_present_in(tiku_host_t *host, const tiku_surface_t *surface,
                          const tiku_rect_t *bounds)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
     tiku_rect_t r = {0, 0, SURFACE_DESKTOP_W, SURFACE_DESKTOP_H};
 
     if (host == NULL || surface == NULL || surface->w != host->width ||
@@ -67,15 +59,11 @@ int tiku_host_present_in(tiku_host_t *host, const tiku_surface_t *surface,
         if (x1 <= x0 || y1 <= y0) return 0;
         r = (tiku_rect_t){x0, y0, x1 - x0, y1 - y0};
     }
-    b->frame_damage = r;
-    b->frame = surface;
-    b->frame_token++;
-    surface_os_desktop_kick();
-    surface_os_desktop_wait(presented, NULL, 0);
+    int result = surface_desktop_present(surface, r);
     host->frames++;
     host->rectangles++;
     host->bytes += (uint64_t)r.w * (uint64_t)r.h * 4u;
-    return b->frame_result;
+    return result;
 }
 
 int tiku_host_present(tiku_host_t *host, const tiku_surface_t *surface)
@@ -83,17 +71,10 @@ int tiku_host_present(tiku_host_t *host, const tiku_surface_t *surface)
     return tiku_host_present_in(host, surface, NULL);
 }
 
-/** @brief Whether a pointer event waits in the ring. */
-static int input_waiting(void *context)
-{
-    (void)context;
-    return surface_desktop_bridge.event_head != surface_desktop_bridge.event_tail;
-}
-
 int tiku_host_events_queued(tiku_host_t *host)
 {
     (void)host;
-    return input_waiting(NULL);
+    return surface_desktop_input_ready(NULL);
 }
 
 void tiku_host_wait(tiku_host_t *host, int64_t timeout_us)
@@ -103,30 +84,12 @@ void tiku_host_wait(tiku_host_t *host, int64_t timeout_us)
     surface_desktop_bridge.waits++;
     if (timeout_us <= 0) timeout_us = 1;
     if (timeout_us > 60000000) timeout_us = 60000000;
-    surface_os_desktop_wait(input_waiting, NULL, (uint64_t)timeout_us);
+    surface_os_desktop_wait(surface_desktop_input_ready, NULL, (uint64_t)timeout_us);
 }
 
 int tiku_host_poll(tiku_host_t *host, tiku_event_t *event)
 {
-    surface_desktop_bridge_t *b = &surface_desktop_bridge;
-    unsigned tail = b->event_tail;
-
-    if (host == NULL || event == NULL || tail == b->event_head) return 0;
-    *event = b->events[tail % SURFACE_DESKTOP_EVENTS];
-    tail++;
-    /* A move with another move queued behind it is dropped for the later
-     * one: the desktop sees where the contact is now, not where it was
-     * while a frame was drawn. */
-    while (event->type == TIKU_EVENT_POINTER_MOVE && tail != b->event_head &&
-           b->events[tail % SURFACE_DESKTOP_EVENTS].type == TIKU_EVENT_POINTER_MOVE) {
-        *event = b->events[tail % SURFACE_DESKTOP_EVENTS];
-        tail++;
-    }
-    b->event_tail = tail;
-    if (event->type == TIKU_EVENT_POINTER_DOWN) {
-        b->down_token = b->frame_token;
-        b->down_taken = 1;
-    }
+    if (host == NULL || event == NULL || !surface_desktop_input(event)) return 0;
     if (event->type == TIKU_EVENT_POINTER_DOWN || event->type == TIKU_EVENT_POINTER_UP ||
         event->type == TIKU_EVENT_POINTER_MOVE) {
         host->x = event->x;
