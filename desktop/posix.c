@@ -161,59 +161,6 @@ static void removed(rnode_t *n)
     if (n->born == window && n->counted == window) mutations -= n->changes;
     else mutations++;
 }
-/* /dev/urandom and /dev/random: SHA-256 in counter mode over a key seeded
- * from the hardware random source when the desktop starts.  The key is
- * replaced after each read, so earlier output cannot be recomputed from
- * the state.  Without a seed, reads fail with EIO. */
-static rnode_t random_device = { .name = "urandom", .mode = S_IFCHR | 0444, .ino = 1 };
-static unsigned char random_key[32];
-static uint64_t random_counter;
-static int random_seeded;
-
-/** @brief One SHA-256 block of the generator: the key, a domain byte (0 for
- *  output, 1 for the next key) and the counter. */
-static void random_block(unsigned char domain, unsigned char out[32])
-{
-    unsigned char block[41];
-
-    memcpy(block, random_key, 32);
-    block[32] = domain;
-    memcpy(block + 33, &random_counter, 8);
-    random_counter++;
-    tiku_sha256(block, sizeof block, out);
-    memset(block, 0, sizeof block);
-}
-
-int surface_desktop_random_seed(void)
-{
-    unsigned char seed[56];
-    uint64_t now = surface_desktop_now_us();
-
-    if (surface_os_desktop_random(seed, 48) != 0) return -1;
-    memcpy(seed + 48, &now, sizeof now);
-    tiku_sha256(seed, sizeof seed, random_key);
-    memset(seed, 0, sizeof seed);
-    random_counter = 0;
-    random_seeded = 1;
-    return 0;
-}
-
-/** @brief Fill @p n bytes from the generator, then replace its key. */
-static void random_fill(unsigned char *out, size_t n)
-{
-    unsigned char digest[32];
-
-    while (n > 0) {
-        size_t k = n < sizeof digest ? n : sizeof digest;
-
-        random_block(0, digest);
-        memcpy(out, digest, k);
-        out += k;
-        n -= k;
-    }
-    random_block(1, random_key);
-    memset(digest, 0, sizeof digest);
-}
 static ino_t next_ino = 2;
 static char cwd[PATH_MAX] = "/";
 
@@ -1381,7 +1328,7 @@ static int fd_idle(fd_t *f, unsigned gen)
 /* The desktop's settings files are files of TikuOS's file store, through
  * compat/posix's store group: each path below, and the path with ".new" or
  * ".tmp-" and six letters after it, names the store file its key gives with
- * the same ending.  A descriptor on one holds store_device and keeps the
+ * the same ending.  A descriptor on one holds kernel_file and keeps the
  * library's descriptor in its reader field; the library's calls that publish
  * wait, so the layer's lock is given back meanwhile.  Reads of a settings
  * file itself come from a copy of its published content, loaded at its first
@@ -1397,7 +1344,7 @@ static stored_t stored[] = {
     { "/home/.local/share/tracker/devices/local.state", "/data/ts/session", NULL, NULL },
 };
 #define STORED (sizeof stored / sizeof stored[0])
-static rnode_t store_device = { .name = "store", .mode = S_IFREG | 0644, .ino = 3 };
+static rnode_t kernel_file;  /* descriptor marker; TikuOS supplies its stat */
 
 /** @brief Whether the @p n bytes at @p s are lowercase letters and digits,
  *  as fill_template() writes them. */
@@ -1556,21 +1503,42 @@ static int stored_parent(const rnode_t *dir)
     return 0;
 }
 
+static int free_descriptor(void)
+{
+    for (int fd = FIRST_FD; fd < FDS; fd++) {
+        if (fds[fd].node == NULL) return fd;
+    }
+    errno = EMFILE;
+    return -1;
+}
+
+static int open_kernel_file(int fd, const char *path, int flags)
+{
+    int kernel_fd;
+
+    if (fd < 0) return -1;
+    kernel_fd = tiku_posix_open(path, flags);
+    if (kernel_fd < 0) return -1;
+    fd_fill(fd, &kernel_file, flags, (uint64_t)kernel_fd);
+    return fd;
+}
+
+static int entropy_path(const char *path)
+{
+    return path != NULL && (strcmp(path, "/dev/random") == 0 ||
+                            strcmp(path, "/dev/urandom") == 0);
+}
+
 /** @brief Open a settings file or its temporary: a reader of the file
  *  itself gets its copy; any other open, the library's descriptor.
  *  @return the descriptor, or -1 with errno */
 static int stored_open(unsigned i, const char *key, int main, int flags)
 {
     int write = (flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)) != 0;
-    int fd, s;
+    int fd = free_descriptor();
     rnode_t *copy;
 
-    for (fd = FIRST_FD; fd < FDS && fds[fd].node != NULL; fd++) {
-    }
-    if (fd == FDS) {
-        errno = EMFILE;
-        return -1;
-    }
+    if (fd < 0) return -1;
     if (main && !write) {
         copy = stored_copy(i);
         if (copy == NULL) return -1;
@@ -1578,9 +1546,7 @@ static int stored_open(unsigned i, const char *key, int main, int flags)
         copy->opened++;
         return fd;
     }
-    s = tiku_posix_open(key, flags);
-    if (s < 0) return -1;
-    fd_fill(fd, &store_device, flags, (uint64_t)s);
+    if (open_kernel_file(fd, key, flags) < 0) return -1;
     fds[fd].stored = (int)i + 1;
     fds[fd].stored_main = main && write;
     return fd;
@@ -1753,8 +1719,7 @@ static rnode_t *attr_fd_node(int fd)
     fd_t *f = fd_of(fd);
 
     if (f == NULL) return NULL;
-    if (f->node == &store_device || f->node->card != NULL ||
-        f->node == &random_device) {
+    if (f->node == &kernel_file || f->node->card != NULL) {
         errno = ENOTSUP;
         return NULL;
     }
@@ -1887,14 +1852,7 @@ static int _open_locked(const char *path, int flags, int mode)
     size_t len;
     int fd, retried = 0;
 
-    if (path != NULL && (strcmp(path, "/dev/urandom") == 0 || strcmp(path, "/dev/random") == 0)) {
-        if ((flags & O_ACCMODE) != O_RDONLY) {
-            errno = EACCES;
-            return -1;
-        }
-        n = &random_device;
-        goto descriptor;
-    }
+    if (entropy_path(path)) return open_kernel_file(free_descriptor(), path, flags);
     {
         char key[PATH_MAX];
         int main = 0, i = stored_path(path, key, sizeof key, &main);
@@ -1980,7 +1938,6 @@ again:
             n->card->version++;
         }
     }
-descriptor:
     for (fd = FIRST_FD; fd < FDS && fds[fd].node != NULL; fd++) {
     }
     if (fd == FDS) {
@@ -2010,7 +1967,7 @@ static int _close_locked(int fd)
 
     if (fd >= 0 && fd < FIRST_FD) return 0;
     if (f == NULL || fd_idle(f, f->gen) != 0) return -1;
-    if (f->node == &store_device) {
+    if (f->node == &kernel_file) {
         int r;
 
         STORED_WAIT(f, r, tiku_posix_close((int)f->reader));
@@ -2071,7 +2028,7 @@ static int _close_locked(int fd)
         }
         return 0;
     }
-    if (--f->node->opened == 0 && f->node->unlinked && f->node != &random_device) node_free(f->node);
+    if (--f->node->opened == 0 && f->node->unlinked) node_free(f->node);
     f->node = NULL;
     return 0;
 }
@@ -2154,7 +2111,7 @@ static _ssize_t read_at(int fd, void *buf, size_t n, const off_t *at)
         errno = EBADF;
         return -1;
     }
-    if (f->node == &store_device) {
+    if (f->node == &kernel_file) {
         off_t keep;
         _ssize_t got;
 
@@ -2164,14 +2121,6 @@ static _ssize_t read_at(int fd, void *buf, size_t n, const off_t *at)
         got = tiku_posix_read((int)f->reader, buf, n);
         (void)tiku_posix_lseek((int)f->reader, keep, SEEK_SET);
         return got;
-    }
-    if (f->node == &random_device) {
-        if (!random_seeded) {
-            errno = EIO;
-            return -1;
-        }
-        random_fill(buf, n);
-        return (_ssize_t)n;
     }
     if (S_ISDIR(f->node->mode)) {
         errno = EISDIR;
@@ -2286,7 +2235,7 @@ static _ssize_t _write_locked(int fd, const void *buf, size_t n)
         errno = EBADF;
         return -1;
     }
-    if (f->node == &store_device) return tiku_posix_write((int)f->reader, buf, n);
+    if (f->node == &kernel_file) return tiku_posix_write((int)f->reader, buf, n);
     at = (f->flags & O_APPEND) ? f->node->size : (size_t)f->pos;
     if (at > SIZE_MAX - n) {
         errno = EFBIG;
@@ -2335,7 +2284,7 @@ static off_t _lseek_locked(int fd, off_t offset, int whence)
     off_t base;
 
     if (f == NULL) return -1;
-    if (f->node == &store_device) return tiku_posix_lseek((int)f->reader, offset, whence);
+    if (f->node == &kernel_file) return tiku_posix_lseek((int)f->reader, offset, whence);
     base = whence == SEEK_SET ? 0 : whence == SEEK_CUR ? f->pos :
            whence == SEEK_END ? (off_t)f->node->size : -1;
     if (base < 0 || base + offset < 0) {
@@ -2357,7 +2306,10 @@ static int _fstat_locked(int fd, struct stat *st)
     }
     f = fd_of(fd);
     if (f == NULL) return -1;
-    if (f->node == &store_device) return stored_stat(tiku_posix_fstat((int)f->reader, st), st);
+    if (f->node == &kernel_file) {
+        int r = tiku_posix_fstat((int)f->reader, st);
+        return f->stored ? stored_stat(r, st) : r;
+    }
     fill_stat(f->node, st);
     return 0;
 }
@@ -2367,6 +2319,7 @@ static int _stat_locked(const char *path, struct stat *st)
     char kernel[PATH_MAX];
     rnode_t *n;
 
+    if (entropy_path(path)) return tiku_posix_stat(path, st);
     {
         int main = 0, i = stored_path(path, kernel, sizeof kernel, &main);
 
@@ -2434,7 +2387,7 @@ static ssize_t pwrite_locked(int fd, const void *buf, size_t n, off_t offset)
     ssize_t put;
 
     if (f == NULL) return -1;
-    if (f->node == &store_device && !(f->flags & O_APPEND)) {
+    if (f->node == &kernel_file && !(f->flags & O_APPEND)) {
         off_t keep = tiku_posix_lseek((int)f->reader, 0, SEEK_CUR);
 
         if (keep < 0 || tiku_posix_lseek((int)f->reader, offset, SEEK_SET) < 0) return -1;
@@ -3209,7 +3162,8 @@ static int fchmod_locked(int fd, mode_t mode)
 {
     fd_t *f = fd_of(fd);
 
-    if (f != NULL && (f->node == &store_device || f->node == stored_owner(f->node)))
+    if (f != NULL && f->node == &kernel_file && !f->stored) { errno = EROFS; return -1; }
+    if (f != NULL && (f->node == &kernel_file || f->node == stored_owner(f->node)))
         return stored_mode(mode);
     if (f == NULL) return -1;
     if ((f->node->mode & 07777) != (mode & 07777)) changed(f->node);
@@ -3233,7 +3187,7 @@ static int fsync_locked(int fd)
     if (fd >= 0 && fd < FIRST_FD) return 0;
     f = fd_of(fd);
     if (f == NULL) return -1;
-    if (f->node == &store_device) {
+    if (f->node == &kernel_file) {
         if (fd_idle(f, f->gen) != 0) return -1;
         STORED_WAIT(f, r, tiku_posix_fsync((int)f->reader));
         return r;
@@ -3276,7 +3230,7 @@ static int ftruncate_locked(int fd, off_t length)
 {
     fd_t *f = fd_of(fd);
 
-    if (f != NULL && (f->node == &store_device || f->node == stored_owner(f->node))) {
+    if (f != NULL && (f->node == &kernel_file || f->node == stored_owner(f->node))) {
         errno = EINVAL;             /* a store file is truncated by O_TRUNC */
         return -1;
     }
@@ -3356,7 +3310,7 @@ int fstatvfs(int fd, struct statvfs *sv)
 
     enter();
     if (fd >= 0 && fd < FIRST_FD) {
-        r = statvfs_node(&random_device, sv);
+        errno = ENOTSUP;
     } else if ((f = fd_of(fd)) != NULL) {
         r = statvfs_node(f->node, sv);
     }

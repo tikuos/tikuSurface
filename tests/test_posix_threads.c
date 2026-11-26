@@ -171,7 +171,6 @@ void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused,
 void surface_os_desktop_unlock(void) {}
 void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us)
 { (void)ready; (void)context; (void)timeout_us; }
-int surface_os_desktop_random(void *bytes, size_t length) { memset(bytes, 7, length); return 0; }
 int surface_os_clock_state(void) { return SURFACE_CLOCK_SET; }
 void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
 

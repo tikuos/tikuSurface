@@ -36,7 +36,7 @@ on them; the display driver then returns its own 768,000-byte scan-out
 buffer. Start reserves the rest after that, in the room the driver left: the
 desktop thread's 2.75 MiB stack, the job thread's 384 KiB stack, the settings
 files' stages and the C library's heap, 9,275,392 bytes. It mounts the SD
-card without writing, seeds the desktop's random generator, opens touch, and
+card without writing, opens touch, and
 starts the desktop on a TikuOS thread. Each owner turn turns touch
 reports into pointer events, presents a frame the desktop handed over and
 advances the desktop's card request. The shell's zero-initialized statics sit
@@ -95,8 +95,8 @@ after the next start. Without a card, `Desktop` and
 and the rest, read through TikuOS's `compat/posix` (`desktop/firmware.mk`
 selects it and leaves the library's own file hooks out); a change under it
 returns `EROFS`. Tracker lists it as a volume in the root window.
-`/dev/urandom` and `/dev/random` return SHA-256 counter-mode
-output from a key seeded once at start. Tracker starts with image thumbnails off.
+`/dev/urandom` and `/dev/random` read the S31's health-checked random source
+through TikuOS character devices. A read returns up to 64 bytes or `EIO` on a source fault. Tracker starts with image thumbnails off.
 
 ## Applications
 

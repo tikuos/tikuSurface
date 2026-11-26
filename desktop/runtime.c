@@ -5,9 +5,8 @@
  * Start reserves the two RGB565 frame buffers and opens the panel on them,
  * then reserves the rest of the runtime's PSRAM: the desktop and job
  * threads' stacks, the settings stages and the C-library heap; it mounts
- * the SD card without writing, seeds the desktop's random generator, opens
- * touch and starts the desktop thread.  Each owner turn
- * turns touch reports into pointer events for the desktop, converts and
+ * the SD card without writing, opens touch and starts the desktop thread.
+ * Each owner turn turns touch reports into pointer events, converts and
  * submits a frame the desktop handed over for a bounded time, advances the
  * desktop's card request on the media bridge, and prints what the desktop
  * wrote to its standard output and error.  The desktop's surface is read
@@ -76,7 +75,6 @@ void surface_desktop_write_stats(uint32_t *console, uint32_t *files, uint32_t *c
 int surface_desktop_files(void);
 int surface_desktop_views_load(void);
 int surface_desktop_views_save(void);
-int surface_desktop_random_seed(void);
 int tiku_posix_mutations(uint64_t *count);
 void surface_desktop_selftest(void);
 
@@ -1315,11 +1313,6 @@ int surface_runtime_start(void)
     if (surface_desktop_files() != 0) return 0;
     if (surface_desktop_views_load() != 0) {
         static const char line[] = "TikuSurface: the folder views in the store did not load\n";
-
-        surface_os_desktop_print(line, sizeof line - 1u);
-    }
-    if (surface_desktop_random_seed() != 0) {
-        static const char line[] = "TikuSurface: the hardware random source gave no seed\n";
 
         surface_os_desktop_print(line, sizeof line - 1u);
     }

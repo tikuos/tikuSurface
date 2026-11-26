@@ -61,17 +61,27 @@ void surface_os_desktop_heap_use(size_t *used, size_t *total, uint32_t *refused,
 void surface_os_desktop_unlock(void) {}
 void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us)
 { (void)ready; (void)context; (void)timeout_us; }
-int surface_os_desktop_random(void *bytes, size_t length) { memset(bytes, 7, length); return 0; }
 static int clock_state = SURFACE_CLOCK_SET;
 
 #include "fake_store.h"
 
 /* TikuOS's compat/posix: the store's files in fake_store.h; any other path
  * is not the library's.  Each call is counted. */
-static int library_calls;
+static int library_calls, entropy_open;
+#define ENTROPY_FD 110
+static int entropy_name(const char *path)
+{
+    return strcmp(path, "/dev/random") == 0 || strcmp(path, "/dev/urandom") == 0;
+}
 int tiku_posix_open(const char *path, int flags)
 {
     library_calls++;
+    if (entropy_name(path)) {
+        if ((flags & O_ACCMODE) != O_RDONLY) { errno = EACCES; return -1; }
+        assert(!entropy_open);
+        entropy_open = 1;
+        return ENTROPY_FD;
+    }
     if (fake_path(path)) return fake_open(path, flags);
     errno = ENOENT;
     return -1;
@@ -79,6 +89,10 @@ int tiku_posix_open(const char *path, int flags)
 ssize_t tiku_posix_read(int fd, void *buf, size_t n)
 {
     library_calls++;
+    if (entropy_open && fd == ENTROPY_FD) {
+        if (n) memset(buf, 0xa5, n);
+        return (ssize_t)n;
+    }
     if (fake_fd(fd)) return fake_read(fd, buf, n);
     errno = EBADF;
     return -1;
@@ -86,6 +100,7 @@ ssize_t tiku_posix_read(int fd, void *buf, size_t n)
 off_t tiku_posix_lseek(int fd, off_t offset, int whence)
 {
     library_calls++;
+    if (entropy_open && fd == ENTROPY_FD) { errno = ESPIPE; return -1; }
     if (fake_fd(fd)) return fake_lseek(fd, offset, whence);
     errno = EBADF;
     return -1;
@@ -93,6 +108,7 @@ off_t tiku_posix_lseek(int fd, off_t offset, int whence)
 int tiku_posix_close(int fd)
 {
     library_calls++;
+    if (entropy_open && fd == ENTROPY_FD) { entropy_open = 0; return 0; }
     if (fake_fd(fd)) return fake_close(fd);
     errno = EBADF;
     return -1;
@@ -101,6 +117,7 @@ int tiku_posix_fcntl(int fd, int cmd) { (void)fd; (void)cmd; return O_RDONLY; }
 int tiku_posix_fstat(int fd, struct stat *st)
 {
     library_calls++;
+    if (entropy_open && fd == ENTROPY_FD) return tiku_posix_stat("/dev/random", st);
     if (fake_fd(fd)) return fake_fstat(fd, st);
     errno = EBADF;
     return -1;
@@ -108,6 +125,7 @@ int tiku_posix_fstat(int fd, struct stat *st)
 int tiku_posix_stat(const char *path, struct stat *st)
 {
     library_calls++;
+    if (entropy_name(path)) { memset(st, 0, sizeof *st); st->st_mode = S_IFCHR | 0444; return 0; }
     if (fake_path(path)) return fake_stat(path, st);
     errno = ENOENT;
     return -1;
@@ -433,6 +451,22 @@ int main(void)
     DIR *d;
 
     assert(surface_desktop_files() == 0);
+    {
+        const char *paths[] = { "/dev/random", "/dev/urandom" };
+        struct stat st;
+        unsigned char byte;
+
+        for (size_t i = 0; i < 2; i++) {
+            assert(_stat(paths[i], &st) == 0 && S_ISCHR(st.st_mode));
+            int fd = _open(paths[i], O_RDONLY, 0);
+            assert(fd >= 0 && entropy_open);
+            assert(_fstat(fd, &st) == 0 && S_ISCHR(st.st_mode));
+            assert(_read(fd, &byte, 1) == 1 && byte == 0xa5);
+            assert(_lseek(fd, 0, SEEK_SET) == -1 && errno == ESPIPE);
+            assert(_close(fd) == 0 && !entropy_open);
+            assert(_open(paths[i], O_WRONLY, 0) == -1 && errno == EACCES);
+        }
+    }
 
     /* Without a card, Desktop and Documents say so and take nothing new:
      * no file, folder or rename, and their files take no writer. */

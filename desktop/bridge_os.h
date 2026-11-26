@@ -45,8 +45,6 @@ int surface_os_desktop_blocked(void);
 /** @brief The preempted desktop thread's program counter, return address
  *  and stack pointer from its saved frame; zero when it is not preempted. */
 int surface_os_desktop_context(uintptr_t *pc, uintptr_t *ra, const uint32_t **sp);
-/** @brief Fill @p bytes from the hardware random source; 0, or -1 on a fault. */
-int surface_os_desktop_random(void *bytes, size_t length);
 /** @brief The kernel wall clock's standing: never set, set during this boot,
  *         or set before a restart and carried over it. */
 enum {

@@ -17,7 +17,6 @@
 #include <kernel/timers/tiku_clock.h>
 #include <kernel/vfs/tiku_vfs.h>
 #include <services/console/tiku_console.h>
-#include <arch/esp32s31/tiku_trng_arch.h>
 #include <arch/esp32s31/tiku_runtime_arch.h>
 #include <arch/esp32s31/tiku_psram_arch.h>
 #include <kernel/memory/tiku_mem.h>
@@ -98,20 +97,6 @@ void surface_os_desktop_statics(void **base, size_t *bytes)
 
 void surface_os_desktop_lock(void) { tiku_atomic_enter(); }
 void surface_os_desktop_unlock(void) { tiku_atomic_exit(); }
-
-int surface_os_desktop_random(void *bytes, size_t length)
-{
-    uint8_t *out = bytes;
-
-    while (length > 0u) {
-        size_t n = length > 4096u ? 4096u : length;
-
-        if (tiku_trng_arch_read_bytes(out, n) != TIKU_TRNG_OK) return -1;
-        out += n;
-        length -= n;
-    }
-    return 0;
-}
 
 uintptr_t surface_os_desktop_sample(void)
 {
