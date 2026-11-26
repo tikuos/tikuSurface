@@ -131,7 +131,7 @@ static struct {
     size_t psram_spare;       /* the tier's bytes not reserved */
     uint64_t burst_start, last_status;
     int capturing;
-    unsigned capture_row;
+    unsigned capture_row, capture_x;
     uint32_t sample_head;     /* samples taken, the ring's next slot modulo SAMPLE_SLOTS */
     uint32_t sample_idle;     /* turns that found the desktop thread blocked */
     uint32_t sample_dump;     /* next sample the dump prints, or UINT32_MAX */
@@ -968,26 +968,33 @@ int tiku_framebuffer_complete(tiku_framebuffer_t *owner, uint64_t token,
     return 1;
 }
 
-/** @brief Print one row of the front buffer as runs of count and RGB565 colour. */
-static void capture_row(void)
+/** @brief Send up to 32 RGB565 runs from the frozen front buffer per kernel turn. */
+static void capture_chunk(void)
 {
     const uint16_t *row = rt.rgb[rt.presentation.front] + rt.capture_row * SURFACE_DESKTOP_W;
-    static char line[16 + SURFACE_DESKTOP_W * 7];
-    int at = snprintf(line, sizeof line, "F%03u ", rt.capture_row);
-    unsigned x = 0;
+    static const char hex[] = "0123456789abcdef";
+    char chunk[8 + 32 * 6];
+    size_t n = 0;
+    unsigned x = rt.capture_x;
 
-    while (x < SURFACE_DESKTOP_W) {
-        unsigned run = 1;
-
-        while (x + run < SURFACE_DESKTOP_W && run < 255u && row[x + run] == row[x]) run++;
-        at += snprintf(line + at, sizeof line - (size_t)at, "%02x%04x", run, row[x]);
+    if (x == 0) n = (size_t)snprintf(chunk, sizeof chunk, "F%03u ", rt.capture_row);
+    for (unsigned i = 0; i < 32 && x < SURFACE_DESKTOP_W; i++) {
+        unsigned run = 1, color = row[x];
+        while (run < 255 && x + run < SURFACE_DESKTOP_W && row[x + run] == color) run++;
+        chunk[n++] = hex[run >> 4];
+        chunk[n++] = hex[run & 15];
+        for (int shift = 12; shift >= 0; shift -= 4) chunk[n++] = hex[(color >> shift) & 15];
         x += run;
     }
-    line[at++] = '\n';
-    surface_os_desktop_print(line, (size_t)at);
-    if (++rt.capture_row == SURFACE_DESKTOP_H) {
+    if (x == SURFACE_DESKTOP_W) {
+        chunk[n++] = '\n';
+        x = 0;
+        rt.capture_row++;
+    }
+    rt.capture_x = x;
+    surface_os_desktop_print(chunk, n);
+    if (rt.capture_row == SURFACE_DESKTOP_H) {
         static const char end[] = "CAPTURE END\n";
-
         surface_os_desktop_print(end, sizeof end - 1u);
         rt.capturing = 0;
     }
@@ -1040,7 +1047,7 @@ int surface_runtime_capture(void)
 {
     if (!rt.running || rt.capturing || rt.presenting || rt.sample_dump != UINT32_MAX) return 0;
     rt.capturing = 1;
-    rt.capture_row = 0;
+    rt.capture_row = rt.capture_x = 0;
     {
         char head[64];
         int n = snprintf(head, sizeof head, "CAPTURE BEGIN %d %d front=%u\n",
@@ -1299,7 +1306,7 @@ int surface_runtime_poll(void)
     if (!card_pending() && surface_desktop_bridge.card_mounted) (void)surface_os_media_idle(card_bridge);
     if (woke) surface_os_desktop_wake();
     if (rt.capturing) {
-        capture_row();
+        capture_chunk();
     } else if (rt.sample_dump != UINT32_MAX) {
         sample_line();
     } else if (rt.stacks_dump != UINT32_MAX) {
