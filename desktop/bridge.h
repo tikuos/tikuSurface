@@ -58,8 +58,6 @@ int surface_desktop_input_ready(void *unused);
 /** @brief Take the next input event, coalescing consecutive pointer moves. */
 int surface_desktop_input(tiku_input_event_t *event);
 #define SURFACE_HASH_PATH_BYTES 64u
-/** @brief Read and hash the named file on the desktop worker. */
-void surface_desktop_hash_file(const char *path);
 
 /* Desktop-thread side, desktop/host.c and desktop/posix.c. */
 /** @brief Append bytes to the log ring; the desktop thread waits for room,

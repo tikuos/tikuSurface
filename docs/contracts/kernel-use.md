@@ -41,6 +41,7 @@ describes.
 | The processor's name and clock | `/sys/device/mcu` and `/sys/cpu/freq`, the rate in force, through `compat/posix`'s reads | `tiku_sys_processor()` in `desktop/sys.c`, for the About box | Desktop thread | Call |
 | The memory maps | `/sys/mem/sram_map` and `/sys/mem/nvm_map` through `compat/posix`'s reads; PSRAM's size, the tier's place and size from `tiku_s31_psram_size` and `tiku_tier_span_stats` at start, and the tier's free bytes again with each status line; the heap's bytes in use from newlib's `mallinfo` | `tiku_sys_memory()` and `tiku_sys_memory_map()` in `desktop/sys.c`, for the About box; `surface_os_psram_extent()`, `surface_os_desktop_heap_live()` | Owner turn; desktop thread | Call |
 | Random devices | TikuOS VFS character devices `/dev/random` and `/dev/urandom`, using the S31 entropy driver | `desktop/posix.c` routes each open to the POSIX read group | Desktop and job threads | One sample per read |
+| File digest | TikuKits streaming SHA-256 | `platform/tikuos/desktop_hash.c` reads the file in 1 KiB chunks | Desktop worker | Open file |
 | Console output | `tiku_console_write` | `surface_os_desktop_print()` | Owner turn | Line |
 | Diagnostics | VFS nodes under `/surface` | `platform/tikuos/diagnostics.c` | Owner turn | Until restart |
 

@@ -45,6 +45,11 @@ def main():
         print('desktop placement: missing symbols ' + ' '.join(missing))
         return 1
     errors = []
+    if any(name.split('.')[0] in ('sha256_block', 'sha256_k', 'tiku_sha256')
+           for name in s):
+        errors.append('desktop links Stomme SHA-256 alongside the firmware digest')
+    if 'tiku_kits_crypto_sha256_update' not in s:
+        errors.append('missing TikuKits streaming SHA-256')
     start, end = s['__surface_psram_bss_start'], s['__surface_psram_bss_end']
     if not (PSRAM_STATIC[0] <= start <= end <= PSRAM_STATIC[1]):
         errors.append('statics outside the top PSRAM section')

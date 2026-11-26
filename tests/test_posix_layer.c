@@ -18,7 +18,6 @@
 #include <time.h>
 #include <unistd.h>
 #include "bridge.h"
-#include "tiku_crypto.h"
 #include "tiku_posix.h"
 
 int _open(const char *path, int flags, int mode);
@@ -152,7 +151,6 @@ int tiku_posix_closedir(DIR *dir) { (void)dir; errno = EBADF; return -1; }
 int tiku_posix_is_dir_stream(const DIR *dir) { (void)dir; return 0; }
 uint8_t tiku_posix_authority_set(uint8_t cap) { (void)cap; return 0; }
 int surface_os_clock_state(void) { return clock_state; }
-void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
 
 /** @brief Create an empty file at @p path. */
 static void touch(const char *path)

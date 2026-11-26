@@ -19,7 +19,6 @@
 #include <time.h>
 #include <unistd.h>
 #include "bridge.h"
-#include "tiku_crypto.h"
 #include "tiku_posix.h"
 
 int _open(const char *path, int flags, int mode);
@@ -172,7 +171,6 @@ void surface_os_desktop_unlock(void) {}
 void surface_os_desktop_wait(int (*ready)(void *), void *context, uint64_t timeout_us)
 { (void)ready; (void)context; (void)timeout_us; }
 int surface_os_clock_state(void) { return SURFACE_CLOCK_SET; }
-void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
 
 /* No /Board here; /data is the fake store, whose publications wait while
  * the test holds STORE_OP, as the library's wait for the flash would. */

@@ -537,6 +537,7 @@ $(BUILD)/test-local-programs: tests/tikuos/test_local_programs.c platform/tikuos
 .PHONY: desktop-requests-test
 desktop-requests-test: $(BUILD)/test-desktop-requests
 	$<
+	python3 tests/tikuos/test_desktop_hash.py "$(TIKUOS_ROOT)"
 
 $(BUILD)/test-desktop-requests: tests/tikuos/test_desktop_requests.c desktop/runtime.c desktop/host.c desktop/bridge.h desktop/bridge_os.h shell/settings.c | $(BUILD)
 	$(CC) $(MEDIA_INCLUDES) -std=gnu11 -Wall -Wextra -Werror $(CFLAGS) -ffunction-sections -fdata-sections \

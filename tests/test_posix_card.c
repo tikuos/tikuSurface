@@ -20,7 +20,6 @@
 #include <sys/xattr.h>
 #include <unistd.h>
 #include "bridge.h"
-#include "tiku_crypto.h"
 #include "tiku_posix.h"
 #include "tikuos/card_fixture.h"
 
@@ -111,7 +110,6 @@ void tiku_posix_rewinddir(DIR *dir) { (void)dir; }
 int tiku_posix_closedir(DIR *dir) { (void)dir; errno = EBADF; return -1; }
 int tiku_posix_is_dir_stream(const DIR *dir) { (void)dir; return 0; }
 uint8_t tiku_posix_authority_set(uint8_t cap) { (void)cap; return 0; }
-void tiku_sha256(const void *data, size_t n, unsigned char out[32]) { (void)data; (void)n; memset(out, 1, 32); }
 
 #define CARD_WRITE_PROBE 65536u     /* the largest file the layer publishes */
 static unsigned char big[100u * 1024u], buf[100u * 1024u];

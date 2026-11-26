@@ -34,6 +34,8 @@ void surface_os_desktop_statics(void **base, size_t *bytes);
  *  saved frame while the kernel runs; zero when the thread is blocked in a
  *  wait or has not started. */
 uintptr_t surface_os_desktop_sample(void);
+/** @brief Read and hash the named file on the desktop worker. */
+void surface_desktop_hash_file(const char *path);
 /** @brief Mount the SD card's native media volume without writing to it;
  *  zero when mounted.  Kernel context only. */
 int surface_os_card_mount(void);

@@ -4,7 +4,8 @@
 from Stomme's `packages/shell`, in the S31 application slot. `desktop/desktop.mk`
 compiles the shell package and the kits it uses against `desktop/`, the TikuOS
 side of the desktop. `desktop/firmware.mk` links them with the panel, touch and
-settings bindings of the LCD runtime.
+settings bindings of the LCD runtime. Both native profiles link the SHA-256
+implementation from the firmware checkout at `tikukits/crypto/sha256/`.
 
 From the matching TikuOS root, with TikuSurface at `tikuSurface/`:
 

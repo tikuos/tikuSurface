@@ -17,7 +17,8 @@ DESKTOP_AR := $(patsubst %gcc,%ar,$(S31_CC))
 include $(SURFACE_ROOT)/desktop/desktop.mk
 
 APPL_SRCS := $(addprefix $(SURFACE_ROOT)/platform/tikuos/,bindings.c diagnostics.c \
-    desktop_bindings.c console_io.c terminal_io.c local_form.c local_programs.c basic_window.c display.c input.c settings_io.c)
+    desktop_bindings.c desktop_hash.c console_io.c terminal_io.c local_form.c local_programs.c basic_window.c display.c input.c settings_io.c)
+APPL_SRCS += tikukits/crypto/sha256/tiku_kits_crypto_sha256.c
 include applications/board/gui/sources.mk
 APPL_SRCS += $(TIKU_BOARD_GUI_SRCS) applications/board/gui/tiku_draw_program.c
 APPL_SRCS += services/link/tiku_link_local.c

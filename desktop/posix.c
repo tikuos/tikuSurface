@@ -10,7 +10,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "bridge.h"
-#include "tiku_crypto.h"
 #include "tiku_posix.h"
 #include "tiku_posix_media.h"
 #include <dirent.h>
@@ -4065,35 +4064,4 @@ void surface_desktop_selftest(void)
              close(fd) == 0;
         fprintf(stderr, "posix: urandom=%d errno=%d\n", ok, ok ? 0 : errno);
     }
-}
-
-void surface_desktop_hash_file(const char *path)
-{
-    unsigned char digest[32], *bytes = NULL;
-    size_t total = 0, cap = 0, n;
-    FILE *f;
-
-    f = fopen(path, "rb");
-    if (f == NULL) {
-        fprintf(stderr, "hash %s: errno=%d\n", path, errno);
-        return;
-    }
-    for (;;) {
-        if (total == cap) {
-            unsigned char *grown = realloc(bytes, cap ? cap * 2u : 4096u);
-
-            if (grown == NULL) break;
-            bytes = grown;
-            cap = cap ? cap * 2u : 4096u;
-        }
-        n = fread(bytes + total, 1, cap - total, f);
-        if (n == 0) break;
-        total += n;
-    }
-    fclose(f);
-    tiku_sha256(bytes, total, digest);
-    free(bytes);
-    fprintf(stderr, "hash %s: bytes=%lu sha256=", path, (unsigned long)total);
-    for (int k = 0; k < 32; k++) fprintf(stderr, "%02x", digest[k]);
-    fprintf(stderr, "\n");
 }
