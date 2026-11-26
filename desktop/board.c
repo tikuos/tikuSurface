@@ -54,6 +54,19 @@ static const char *const settings[] = {
     "/sys/radio/txpower", "/sys/time",
 };
 
+/** @brief Wi-Fi operations exposed by the local board device. */
+static int wifi_control(const char *path)
+{
+    static const char prefix[] = "/sys/net/wifi/profiles/";
+    if (!strcmp(path, "/sys/net/wifi/scan") ||
+        !strcmp(path, "/sys/net/wifi/disconnect")) return 1;
+    if (strncmp(path, prefix, sizeof prefix - 1) != 0) return 0;
+    const char *row = path + sizeof prefix - 1;
+    return (row[0] == '0' || row[0] == '1') &&
+           (!strcmp(row + 1, "/ssid") || !strcmp(row + 1, "/auth") ||
+            !strcmp(row + 1, "/connect"));
+}
+
 /*---------------------------------------------------------------------------*/
 /* THE KERNEL'S FILES                                                        */
 /*---------------------------------------------------------------------------*/
@@ -216,6 +229,8 @@ static void model_of_node(tiku_backend_t *be, const board_node_t *n, tiku_model_
         m->kind = n->dir ? TIKU_KIND_VIRTUAL_DIR : TIKU_KIND_DEVICE_NODE;
     }
     m->facts.perm = n->perm;
+    if (!strncmp(n->path, "/sys/net/wifi/", 14) && !wifi_control(n->path))
+        m->facts.perm &= ~TIKU_P_WRITE;
     if (m->kind == TIKU_KIND_DIRECTORY) m->facts.perm |= TIKU_P_READ | TIKU_P_WRITE;
     else if (m->kind == TIKU_KIND_VIRTUAL_DIR) m->facts.perm |= TIKU_P_READ;
     snprintf(m->facts.req_cap, sizeof m->facts.req_cap, "%s", n->cap);
@@ -355,8 +370,15 @@ static int bd_read(tiku_backend_t *be, const char *path, void *buf, size_t max)
 
 /** @brief Whether the desktop changes @p path: a file in the store, or one
  *  of the reviewed settings. */
-static int changeable(const char *path)
+static int changeable(board_t *board, const char *path)
 {
+    if (wifi_control(path)) {
+        pthread_mutex_lock(&board->lock);
+        const board_node_t *node = board_find(board, path);
+        int allowed = node && (node->perm & TIKU_P_WRITE) && !secret(node->meta);
+        pthread_mutex_unlock(&board->lock);
+        return allowed;
+    }
     if (in_store(path) && strcmp(path, BOARD_STORE) != 0) return 1;
     for (unsigned i = 0; i < sizeof settings / sizeof settings[0]; i++) {
         if (strcmp(path, settings[i]) == 0) return 1;
@@ -373,8 +395,7 @@ static int bd_write(tiku_backend_t *be, const char *path, const void *buf, size_
     int store = in_store(path), fd, r = 0, e = 0;
     size_t put = 0u;
 
-    (void)be;
-    if (!changeable(path)) {
+    if (!changeable(be->impl, path)) {
         snprintf(err, errmax, "%s is not changed from the desktop.", path);
         return -1;
     }

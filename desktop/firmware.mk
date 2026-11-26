@@ -18,6 +18,11 @@ include $(SURFACE_ROOT)/desktop/desktop.mk
 
 APPL_SRCS := $(addprefix $(SURFACE_ROOT)/platform/tikuos/,bindings.c diagnostics.c \
     desktop_bindings.c display.c input.c settings_io.c)
+ifeq ($(S31_PROFILE),s31-connected)
+S31_SHELL_COMMANDS += DNS NTP
+APPL_SRCS += shell/commands/tiku_shell_cmd_dns.c shell/commands/tiku_shell_cmd_ntp.c tikukits/net/ipv4/tiku_kits_net_dns.c \
+    tikukits/time/ntp/tiku_kits_time_ntp.c tikukits/time/tiku_kits_time.c
+endif
 APPL_SRCS += arch/esp32s31/tiku_storage_async_io.c
 APPL_SRCS += interfaces/input/tiku_touch_gt1151.c drivers/input/gt1151/tiku_drv_input_gt1151.c
 APPL_SRCS += interfaces/display/tiku_display.c interfaces/display/tiku_display_async.c \
@@ -34,6 +39,9 @@ ifeq ($(filter $(SURFACE_PPA),0 1),)
 $(error SURFACE_PPA must be 0 or 1)
 endif
 APPL_CFLAGS := -DSURFACE_PPA=$(SURFACE_PPA)
+ifeq ($(S31_PROFILE),s31-connected)
+APPL_CFLAGS += -DTIKU_S31_RADIO_IMAGE_BOUNDS_ENABLE=1 -DTIKU_KITS_NET_DNS_ENABLE=1
+endif
 APPL_CFLAGS += -DTIKU_APPLICATION_HEADER='"$(SURFACE_ROOT)/platform/tikuos/boot.h"'
 APPL_CFLAGS += -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DSURFACE_DESKTOP=1
 APPL_CFLAGS += -DTIKU_APPLICATION_PROJECT='"tikusurface_s31_lcd"'

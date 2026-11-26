@@ -142,7 +142,11 @@ int surface_os_desktop_store_memory(void *memory, size_t bytes)
 int surface_os_desktop_authority(void)
 {
     if (!tiku_thread_in_kernel()) return -1;
-    (void)tiku_posix_authority_set(TIKU_VFS_CAP_SYS | TIKU_VFS_CAP_FS);
+    uint8_t cap = TIKU_VFS_CAP_SYS | TIKU_VFS_CAP_FS;
+#if TIKU_S31_WIFI_ENABLE
+    cap |= TIKU_VFS_CAP_NET;
+#endif
+    (void)tiku_posix_authority_set(cap);
     return 0;
 }
 

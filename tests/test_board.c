@@ -29,10 +29,12 @@ static char manifest[2048] =
     "/sys/led\tf\trw\tbool,none,live,free;read=poll\thw\t00000014\n"
     "/sys/key\tf\tr-\tstr,none,static,free;read=poll;secret\tnet\t00000015\n"
     "/data\td\t--\t-\tfs\t00000020\n"
+    "/sys/net/wifi/scan\tf\t-w\t-\tnet\t00000030\n"
     "/sys/cut\tf\tr-\tu32";
 static struct { const char *path; char value[64]; } values[] = {
     { "/sys/uptime", "42\n" }, { "/sys/device/name", "panel\n" },
     { "/sys/led", "0\n" }, { "/sys/key", "hunter2\n" },
+    { "/sys/net/wifi/scan", "" }, { "/sys/net/wifi/disconnect", "" },
 };
 #define VALUES (sizeof values / sizeof values[0])
 /* Change records waiting for the reader, and its lost count. */
@@ -309,6 +311,16 @@ int main(void)
     refuse_authority = 1;
     assert(b->ops->write(b, "/sys/device/name", "x", 1, err, sizeof err) == -1 &&
            strstr(err, "authority") && !strcmp(values[1].value, "desk"));
+    refuse_authority = 0;
+
+    assert(b->ops->write(b, "/sys/net/wifi/scan", "start", 5, err, sizeof err) == 0);
+    assert(!strcmp(values[value_of("/sys/net/wifi/scan")].value, "start"));
+    assert(b->ops->write(b, "/sys/net/wifi/disconnect", "disconnect", 10, err, sizeof err) < 0);
+    assert(b->ops->write(b, "/sys/net/wifi/saved", "forget", 6, err, sizeof err) < 0);
+    assert(b->ops->write(b, "/sys/net/wifi/profiles/0/password", "secret", 6, err, sizeof err) < 0);
+    refuse_authority = 1;
+    assert(b->ops->write(b, "/sys/net/wifi/scan", "start", 5, err, sizeof err) < 0 &&
+           strstr(err, "authority"));
     refuse_authority = 0;
 
     /* Changes, each under the folder it touches: a value's folder, a
