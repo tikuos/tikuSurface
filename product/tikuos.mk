@@ -315,6 +315,7 @@ endif
 APPL_CFLAGS += -DTIKU_MEDIA_DIRECTORIES_ENABLE=$(SURFACE_DIRECTORIES) -DTIKU_MEDIA_NAMES_ENABLE=1 -DTIKU_MEDIA_ASYNC_ENABLE=1 -DTIKU_I2C_BUDGET_ENABLE=1 -DTIKU_S31_SD_ASYNC_ENABLE=1 -DTIKU_TFS_ASYNC_ENABLE=1 -DTIKU_S31_STORAGE_ASYNC_ENABLE=1
 S31_LDFLAGS += -Wl,-u,tiku_media_card_mutation_size,-u,tiku_media_card_mutation_init,-u,tiku_media_card_mutation_step,-u,tiku_media_card_mutation_idle,-u,tiku_media_card_mutation_cancel,-u,tiku_media_checkpoint_step,-u,tiku_media_checkpoint_cancel
 S31_LDFLAGS += -Wl,-u,tiku_s31_sd_open_begin,-u,tiku_s31_sd_read_begin,-u,tiku_s31_sd_clock_begin,-u,tiku_s31_sd_poll,-u,tiku_s31_sd_cancel,-u,tiku_s31_mfs_async_acquire,-u,tiku_s31_mfs_async_read,-u,tiku_s31_mfs_async_poll,-u,tiku_s31_mfs_async_close
+APPL_CFLAGS += -DSURFACE_PPA=0
 APPL_SRCS += $(SURFACE_ROOT)/platform/tikuos/display.c $(SURFACE_ROOT)/platform/tikuos/input.c $(SURFACE_ROOT)/platform/tikuos/media_io.c $(SURFACE_ROOT)/platform/tikuos/settings_io.c
 APPL_SRCS += services/storage/tiku_media_async.c services/storage/tiku_media_mutation.c services/storage/tiku_media_checkpoint.c arch/esp32s31/tiku_storage_async_io.c
 APPL_SRCS += interfaces/input/tiku_touch_gt1151.c drivers/input/gt1151/tiku_drv_input_gt1151.c

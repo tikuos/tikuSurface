@@ -133,7 +133,7 @@ int surface_os_display_close(void)
     if (!surface_os_in_owner()) return 0;
     if (!opened) return 1;
     if (tiku_s31_display_close(&display) != TIKU_DISPLAY_OK) return 0;
-    if (ppa_notified) (void)tiku_s31_ppa_notify(NULL);
+    if (SURFACE_PPA && ppa_notified) (void)tiku_s31_ppa_notify(NULL);
     ppa_notified = 0;
     opened = 0;
     buffers[0] = buffers[1] = NULL;
