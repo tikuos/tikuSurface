@@ -103,7 +103,8 @@ through TikuOS character devices. A read returns up to 64 bytes or `EIO` on a so
 
 `desktop/builtins.c` lists the applications linked into the desktop, which
 open their windows in its own workspace: Camera, in the Deskbar's Graphics &
-Design group, and Sound Recorder among its applications. Camera opened
+Design group, and Sound Recorder, in its Audio group; the icons `camera` and
+`sound_recorder` come from the `DESKTOP_ASSETS` checkout. Camera opened
 alone shows the board's camera; handed a PNG, JPEG or BMP file, from Tracker
 through the launcher's host for built-in applications, it shows the file in
 TikuImage's viewer from Stomme's `packages/apps/apps/image`.

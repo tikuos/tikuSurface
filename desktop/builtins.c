@@ -84,8 +84,8 @@ const tiku_trk_builtin_t *tiku_trk_builtins(int *count)
 {
     static const tiku_trk_builtin_t list[] = {
         {"camera", "Camera", "image/png,image/jpeg,image/bmp,image/x-ms-bmp",
-         "image_viewer", "graphics", camera_entry, camera_tick, NULL},
-        {"recorder", "Sound Recorder", "audio/wav,audio/x-wav", NULL, "applications",
+         "camera", "graphics", camera_entry, camera_tick, NULL},
+        {"recorder", "Sound Recorder", "audio/wav,audio/x-wav", "sound_recorder", "audio",
          recorder_entry, surface_recorder_tick, NULL},
         {.id = "terminal", .name = TIKU_PRODUCT_TERMINAL_NAME, .icon = "terminal",
          .category = "utilities", .start = surface_terminal_start},

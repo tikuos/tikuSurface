@@ -636,7 +636,7 @@ static void draw_list(tiku_surface_t *s)
     char text[128];
     int rows = r.h / ROW_H;
 
-    tiku_ui_sunken(s, r, 0xFFFFFFFFu);
+    tiku_ui_sunken(s, r, TIKU_C_DOC);
     if (rec.nfiles == 0) {
         tiku_text_line_draw(s, (tiku_rect_t){r.x + 6, r.y + 4, r.w - 12, ROW_H}, 0,
                             rec.listing ? "Reading ~/Recordings..." :
