@@ -567,3 +567,13 @@ $(BUILD)/test-mouse-settings: tests/test_mouse_settings.c desktop/mouse_preferen
 mouse-settings-test: $(BUILD)/test-mouse-settings
 	$(BUILD)/test-mouse-settings
 test: mouse-settings-test
+
+$(BUILD)/test-orbit: tests/test_orbit.c desktop/orbit.c desktop/host.c desktop/orbit.h desktop/bridge.h $(LIBS) | $(BUILD)
+	$(CC) $(MEDIA_INCLUDES) $(SDK_CFLAGS) $(CFLAGS) -std=gnu11 -Wall -Wextra -Werror \
+	    -Idesktop -Ifoundation/packages/shell/system/desktop $(addprefix -Ifoundation/kits/,support interface device storage) \
+	    -ffunction-sections -fdata-sections $(filter %.c,$^) $(SDK_LIBRARIES) \
+	    -Wl,--gc-sections,--wrap=tiku_text -lm -o $@
+.PHONY: orbit-test
+orbit-test: $(BUILD)/test-orbit
+	$(BUILD)/test-orbit
+test: orbit-test

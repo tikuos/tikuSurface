@@ -8,6 +8,7 @@
  */
 #include "camera.h"
 #include "recorder.h"
+#include "orbit.h"
 #include "tiku_posix.h"
 #include <fcntl.h>
 #include "tiku_app_product.h"
@@ -98,6 +99,8 @@ const tiku_trk_builtin_t *tiku_trk_builtins(int *count)
          recorder_entry, surface_recorder_tick, NULL},
         {.id = "terminal", .name = TIKU_PRODUCT_TERMINAL_NAME, .icon = "terminal",
          .category = "utilities", .start = surface_terminal_start},
+        {.id = "orbit", .name = "Orbit", .icon = "application", .category = "demos",
+         .open = surface_orbit_open, .tick = surface_orbit_tick},
         {.id = "basic-counter", .name = "BASIC Counter", .icon = "calculator",
          .category = "utilities", .start = basic_start},
     };
