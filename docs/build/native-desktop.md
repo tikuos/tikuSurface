@@ -30,6 +30,20 @@ when it runs. Kept libnosys calls other than `_execve`, `_fork`, `_kill` and
 strings, sounds and icons. `DESKTOP_FOUNDATION` names the Stomme checkout and
 defaults to the pinned `foundation/`.
 
+## Graphics acceleration
+
+Stomme passes clipped rectangle fills and same-scale image copies to the native
+renderer. On the desktop thread, rectangles of at least 16,384 pixels with a
+suitable row stride can use the S31 Pixel Processing Accelerator. The CPU paints
+the end strips outside whole cache lines and handles small operations and
+hardware refusals. The worker can draw into the surface again after the kernel
+has retired the job. The `paint` field in the desktop status line counts
+completed hardware fills, copies and accepted jobs that failed.
+
+Build with `SURFACE_PPA_PAINT=0` to measure software drawing with the same
+hardware conversion to the LCD’s RGB565 format. `SURFACE_PPA=0` disables both
+hardware drawing and conversion.
+
 ## Runtime
 
 Start reserves two RGB565 frame buffers in the PSRAM tier and opens the panel
@@ -101,6 +115,11 @@ through TikuOS character devices. A read returns up to 64 bytes or `EIO` on a so
 
 ## Applications
 
+Open **Demos → Orbit** in the Deskbar to watch three satellites and measure
+desktop FPS. Orbit divides successful desktop presentations by elapsed time
+and updates the reading about once a second. Minimizing the window pauses
+the animation. Restoring it starts a fresh measurement.
+
 `desktop/builtins.c` lists the applications linked into the desktop, which
 open their windows in its own workspace: Camera, in the Deskbar's Graphics &
 Design group, and Sound Recorder, in its Audio group; the icons `camera` and
@@ -150,7 +169,9 @@ saved take.
 The list shows the WAV files in `~/Recordings`, newest first; a tapped one's
 waveform fills the scope. The microphone's gain is 30 dB unless
 `/sys/audio/mic/gain` is set. `S31_MIC=1`, set in `desktop/firmware.mk`,
-builds the service and its nodes into the image.
+builds the service and its nodes into the S31 image. The P4X RAM desktop
+selects the ES8311 with `P4X_MIC=1`. Its `~/Recordings` directory lives in
+RAM and holds the WAV files until reset.
 
 The viewer's window fills the screen below the bar, and it decodes each
 picture no larger than its view, after letting the one shown go: a baseline
@@ -181,9 +202,11 @@ landed until the finger travels 10 pixels, and a press within 24 pixels of a
 tap and 400 ms after it lands on that tap, so the desktop sees a double click
 (`desktop/gesture.h`). `SURFACE_TOUCH_MODE=0` posts the raw contacts.
 
-Touch mode also turns on the shell's touch behaviour (`TIKU_SHELL_TOUCH`):
-the 16 px face, the lens for small controls and menus, and the calibration
-page in the Tiku menu. The page reaches the touch map through
+In touch mode, open **Deskbar → Settings → Touch**. **Magnify small controls**
+enlarges menus and small targets under the finger. It starts enabled and the
+desktop saves the choice in `/data/ts/touch`. **Calibrate touchscreen** opens
+the same nine-target page as **Calibrate Touch** in the Tiku menu. Tap each
+target, then tap **Keep** to save the alignment. The page reaches the touch map through
 `tiku_shell_touch_fit()`, `tiku_shell_touch_keep()` and
 `tiku_shell_touch_revert()` in `desktop/runtime.c`: a fit corrects the map in
 force from the edges the page measured and stores nothing, keep writes the
@@ -205,3 +228,85 @@ calibration record, and revert reads it back.
 | `drag=X0,Y0,X1,Y1` | queue a press, eight moves along the line and a release |
 | `finger=X,Y` `lift` | place a finger at a panel point, or lift it, through the touch path: mark, slop and tap landing |
 | `target=X,Y` | show the touch mark alone at a panel point, as a point to aim a finger at; a finger moves it and its lift removes it |
+
+## ESP32-P4X desktop archive
+
+The P4X board selection builds the shared desktop, Deskbar, Tracker,
+mouse motion and presentation code for a 1024 by 600 surface. The host
+test covers the final row and column, source stride and calibration data.
+Build the archive from the matching TikuOS root. The build reads
+`applications/board/gui/tiku_draw_program.h` from the Tracker checkout
+under TikuOS. Set `DESKTOP_ASSETS` to the separate TikuDesktop checkout.
+The RAM and flash images also use the board fixture in
+`TikuBench/tests/esp32p4/test_p4x_panel.c` and SHA-256 from `tikukits/`.
+
+```sh
+make -f tikuSurface/desktop/desktop.mk DESKTOP_BOARD=esp32_p4x_function_ev_board \
+    DESKTOP_ASSETS=/path/to/TikuDesktop DESKTOP_FOUNDATION=/path/to/Stomme \
+    CROSS_COMPILE=riscv32-esp-elf- desktop-archive
+```
+
+The archive lands in `build/desktop-p4x/libsurface_desktop.a`. TikuOS's
+`arch/esp32p4/README.md` describes the separate RAM image for display,
+touch and external memory. The display adapter uses the kernel’s paired
+submission API at 1024 by 600. Each RGB565 scanout buffer occupies
+1,228,800 bytes. The native runtime reserves 2,457,600 bytes for the pair.
+The GT911 default maps raw (0, 0) to screen (1023, 599). A saved calibration
+overrides the board default.
+
+The P4X renderer draws the desktop on CPU0. For presentation, TikuSurface
+submits each changed XRGB8888 rectangle to the TikuOS PPA scaler at unit
+scale. The completion interrupt wakes the owner to present the RGB565 buffer.
+The worker can draw into the source again while the display completes
+the previous frame.
+If the engine refuses a rectangle, the CPU converts it. If a conversion is
+still pending after 250 ms, the driver resets its DMA engine and retires the
+request. The desktop then uses CPU conversion until the display reopens.
+Build the RAM image with `SURFACE_PPA=0` to measure CPU conversion.
+Pass `--require-ppa` to the loader to check that hardware jobs completed
+and the display reported zero conversion failures.
+
+The RAM desktop runs the shared Tracker, Deskbar and application server on a
+TikuOS worker on CPU0 at 400 MHz. At startup the test measures CPU cycles
+against a 10 ms interval on the 16 MHz system timer and checks the selected
+frequency within 0.5%. Pass `P4X_CPU_MHZ=40` to build the crystal-clock
+configuration. The pixel clock is 40 MHz in both configurations. Tracker opens `/devices/board/sys/clock` and lists the kernel's
+`ticks` device node. The loader places the desktop in PSRAM and verifies its
+SHA-256 digest before starting it. The kernel file store uses a separate 3 MiB
+PSRAM region that the test formats on each run. Settings last for the session.
+The RAM profile leaves the SD card, camera, terminal and BASIC adapters offline.
+The wall clock starts unset.
+
+From the TikuOS checkout, build the RAM image with the matching kernel, drivers,
+TikuBench, Stomme and TikuDesktop sources. The Python interpreter needs esptool
+and pyserial. Run the loader with the board's USB Serial/JTAG port and serial
+number. By default the loader resets the P4X to its installed firmware when
+the test finishes. Add `--leave-running` to release the console and use
+the RAM desktop until the next board reset.
+
+```sh
+make -j8 -f tikuSurface/tests/p4x/ram.mk TOOLCHAIN_PREFIX=riscv32-esp-elf- \
+    DESKTOP_ASSETS=/path/to/TikuDesktop DESKTOP_FOUNDATION=/path/to/Stomme
+python3 tikuSurface/tools/qualify_p4x.py --port "$PORT" --serial "$P4_SERIAL" \
+    --capture tracker.png
+```
+
+`--test-recorder` opens **Audio → Sound Recorder** on the P4X, records two
+takes through its Record and Stop controls, and reopens the WAV files on
+the board to check the PCM format, sample counts and signal variation.
+
+`--test-live-row` checks three distinct frame counters while Tracker displays
+the clock folder. Each sampled conversion must cover less than half the panel.
+`--test-menu` taps the Deskbar in software, selects the button in the touch
+magnifier when enabled, and checks the shared Deskbar's painted menu state
+before and after dismissal. With `--capture tracker.png --test-app`, the
+runner opens **Settings → Touch** through the Deskbar, switches off
+**Magnify small controls** and checks the saved byte in the kernel file
+store. It closes the window, reopens it by direct taps, restores magnification
+and closes it through the touch lens. The runner saves the window and
+the restored Tracker frame alongside `tracker.png`. Both checks inject
+screen coordinates into the desktop input queue. `--hold 120` leaves the
+desktop available for physical touch for two minutes after capture.
+The board reports the GT911 touch history before
+reset. `--corrupt-segment` changes one byte in the transfer to check that the
+loader rejects the payload.

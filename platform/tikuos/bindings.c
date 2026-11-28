@@ -13,7 +13,11 @@
 #include <kernel/timers/tiku_clock.h>
 #include <kernel/timers/tiku_timer.h>
 #include <kernel/threads/tiku_thread.h>
+#if defined(TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD)
+#include <arch/esp32p4/tiku_irq_arch.h>
+#else
 #include <arch/esp32s31/tiku_runtime_arch.h>
+#endif
 
 static tiku_arena_t arena;
 static struct tiku_timer wake;
@@ -45,7 +49,13 @@ int surface_os_release(void *base)
 }
 
 int surface_os_in_owner(void)
-{ return tiku_thread_in_kernel() && !tiku_s31_in_trap; }
+{
+#if defined(TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD)
+    return tiku_thread_in_kernel() && !tiku_p4_in_isr();
+#else
+    return tiku_thread_in_kernel() && !tiku_s31_in_trap;
+#endif
+}
 
 int surface_os_free_bytes(uint32_t *bytes)
 {

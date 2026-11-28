@@ -24,13 +24,14 @@
 #include "../platform/tikuos/camera.h"
 #include "board.h"
 #include "gesture.h"
+#include "../shell/touch_map.h"
+#include "mouse.h"
 #include "tiku_event.h"
 #include "tiku_trk_deskbar.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
-#define RGB_BYTES (SURFACE_DESKTOP_W * SURFACE_DESKTOP_H * 2u)
 /* The desktop keeps its state, desktop_t, in a local variable of
  * tracker_run(), whose frame is 2,609,920 bytes on the S31 with
  * TikuSurface's bounds; the rest covers the call chains on the desktop
@@ -112,6 +113,10 @@ static struct {
     int touch_active, touch_x, touch_y;
     unsigned touch_id;
     surface_gesture_t gesture;
+    surface_mouse_position_t pointer;
+    uint32_t mouse_sequence;
+    unsigned mouse_buttons;
+    int mouse_connected, mouse_blocked, mouse_shape, mouse_visible;
     int touch_held;           /* a finger placed by the control file: kept until lift */
     uint64_t last_report, frame_started;
     surface_input_stats_t input;
@@ -125,6 +130,7 @@ static struct {
     uint32_t jobs_scan;       /* next word its high-water scan examines */
     uint32_t jobs_used;       /* its deepest use found, in bytes */
     size_t psram, psram_below, psram_tier;  /* PSRAM, below the tier, the tier */
+    size_t psram_top_store;    /* mounted file store at the end of PSRAM */
     size_t psram_spare;       /* the tier's bytes not reserved */
     uint64_t burst_start, last_status;
     int capturing;
@@ -227,6 +233,7 @@ static struct {
     uint64_t serial, down_serial;
     int down_taken;
     tiku_input_event_t events[SURFACE_DESKTOP_EVENTS];
+    uint8_t from_mouse[SURFACE_DESKTOP_EVENTS];
     unsigned head, tail;
     card_request_t *card;
     map_request_t *map;
@@ -246,6 +253,88 @@ static int request_done(void *arg)
 static void wait_request(int *done)
 {
     while (!request_done(done)) surface_os_desktop_wait(request_done, done, 0);
+}
+
+typedef struct {
+    uint32_t *first, color;
+    const uint32_t *source;
+    unsigned stride, src_stride, width, height;
+    int done, result;
+} paint_request_t;
+
+static paint_request_t *active_paint;
+static uint32_t fills_done, blits_done, paints_failed;
+
+static int start_paint(void *arg)
+{
+    paint_request_t *r = arg;
+
+    if (active_paint || rt.presenting || !rt.running) return 0;
+    if (!surface_os_display_paint(r->first, r->stride, r->source, r->src_stride,
+                                  r->width, r->height, r->color)) return 0;
+    active_paint = r;
+    surface_os_desktop_kick();
+    return 1;
+}
+
+/** @brief Release the worker's pixels when the pixel accelerator finishes. */
+static int poll_paint(void)
+{
+    paint_request_t *r = active_paint;
+    if (!r) return 0;
+    int rc = surface_os_display_paint_poll();
+    if (rc == SURFACE_SCANOUT_BUSY) return 0;
+    active_paint = NULL;
+    r->result = rc == SURFACE_SCANOUT_OK;
+    if (!r->result) ++paints_failed;
+    else if (r->source) ++blits_done;
+    else ++fills_done;
+    __atomic_store_n(&r->done, 1, __ATOMIC_RELEASE);
+    return 1;
+}
+
+static int paint_block(uint32_t *first, unsigned stride, const uint32_t *source,
+                       unsigned src_stride, unsigned width, unsigned height, uint32_t color)
+{
+    /* The worker paints the two edge strips. Each DMA row then owns
+     * complete cache lines, including on a view into a wider surface. */
+    if (width < 32 || !height || (stride & 15u) || stride > 16383u ||
+        width > stride || (source && (width > src_stride || src_stride > 16383u)) ||
+        height > 16383u || width * height < 16384u ||
+        !surface_os_in_desktop()) return 0;
+    unsigned left = (unsigned)(-(uintptr_t)first & 63u) / sizeof *first;
+    unsigned aligned = (width - left) & ~15u;
+    paint_request_t r = {.first = first + left, .stride = stride, .width = aligned,
+                        .height = height, .color = color, .source = source ? source + left : NULL,
+                        .src_stride = src_stride};
+    if (surface_os_desktop_call(start_paint, &r) != 1) return 0;
+    wait_request(&r.done);
+    if (!r.result) return 0;
+    for (unsigned y = 0; y < height; ++y) {
+        uint32_t *row = first + (size_t)y * stride;
+        unsigned right = left + aligned;
+        if (source) {
+            const uint32_t *in = source + (size_t)y * src_stride;
+            memcpy(row, in, left * sizeof *row);
+            memcpy(row + right, in + right, (width - right) * sizeof *row);
+        } else {
+            for (unsigned x = 0; x < left; ++x) row[x] = color;
+            for (unsigned x = right; x < width; ++x) row[x] = color;
+        }
+    }
+    return 1;
+}
+
+int tiku_gfx_native_fill(uint32_t *first, unsigned stride, unsigned width,
+                         unsigned height, uint32_t color)
+{
+    return paint_block(first, stride, NULL, 0, width, height, color);
+}
+
+int tiku_gfx_native_blit(uint32_t *to, unsigned dst_stride, const uint32_t *from,
+                         unsigned src_stride, unsigned width, unsigned height)
+{
+    return paint_block(to, dst_stride, from, src_stride, width, height, 0);
 }
 
 static int submit_frame(void *arg)
@@ -571,7 +660,7 @@ static void load_touch_map(void)
     unsigned char record[SURFACE_SETTINGS_BYTES];
     size_t length = 0;
     int result = surface_os_settings_read(record, sizeof record, &length);
-    rt.map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
+    rt.map = surface_touch_map_default();
     rt.map_status = surface_settings_load(result, record, (unsigned)length, &rt.map);
 }
 
@@ -712,7 +801,7 @@ static void drain_log(void)
 /** @brief Queue one pointer event; a full ring drops it.  A down event
  *  starts the measured delay until a frame the desktop drew after taking
  *  it is on the panel. */
-static void post(tiku_event_type_t type, int x, int y, uint64_t now)
+static void post_button(tiku_event_type_t type, int x, int y, unsigned button, int mouse, uint64_t now)
 {
     unsigned head = devices.head;
 
@@ -721,10 +810,65 @@ static void post(tiku_event_type_t type, int x, int y, uint64_t now)
         rt.input_at = now;
         devices.down_taken = 0;
     }
+    devices.from_mouse[head % SURFACE_DESKTOP_EVENTS] = (uint8_t)mouse;
     devices.events[head % SURFACE_DESKTOP_EVENTS] = (tiku_input_event_t){
-        .type = type, .button = 1, .x = x, .y = y,
+        .type = type, .button = button, .x = x, .y = y,
         .time_us = now > INT64_MAX ? INT64_MAX : (int64_t)now };
     __atomic_store_n(&devices.head, head + 1u, __ATOMIC_RELEASE);
+}
+
+static void post(tiku_event_type_t type, int x, int y, uint64_t now)
+{
+    post_button(type, x, y, 1, 0, now);
+}
+
+void surface_desktop_cursor_shape(int shape)
+{
+    __atomic_store_n(&rt.mouse_shape, shape, __ATOMIC_RELEASE);
+}
+
+/** @brief A touch holds the pointer until lift; a mouse drag holds it until
+ * its buttons are up. Leave room in the input ring for a complete report. */
+static int mouse_input(uint64_t now)
+{
+    static const unsigned button_number[] = {1, 3, 2};
+    int posted = 0;
+    surface_mouse_settings_t prefs = surface_mouse_settings();
+    for (unsigned n = 0; n < 16 && devices.head - devices.tail <= SURFACE_DESKTOP_EVENTS - 4; ++n) {
+        int dx, dy, connected;
+        unsigned buttons;
+        if (!surface_os_mouse_read(&rt.mouse_sequence, &dx, &dy, &buttons, &connected)) break;
+        int attached = connected && !rt.mouse_connected;
+        rt.mouse_connected = connected;
+        if (rt.touch_active || rt.mouse_blocked) {
+            rt.mouse_blocked = buttons != 0;
+            continue;
+        }
+        int moved = surface_mouse_move(&rt.pointer, prefs, dx, dy);
+        unsigned changed = buttons ^ rt.mouse_buttons;
+        if (attached || dx || dy || changed) rt.mouse_visible = connected;
+        if (!connected) rt.mouse_visible = 0;
+        if (moved || attached) {
+            post_button(TIKU_EVENT_POINTER_MOVE, rt.pointer.x, rt.pointer.y, 0, 1, now);
+            posted = 1;
+        }
+        for (unsigned i = 0; i < 3; ++i) {
+            unsigned bit = 1u << i;
+            if (changed & bit) {
+                post_button(buttons & bit ? TIKU_EVENT_POINTER_DOWN : TIKU_EVENT_POINTER_UP,
+                            rt.pointer.x, rt.pointer.y, button_number[i], 1, now);
+                posted = 1;
+            }
+        }
+        rt.mouse_buttons = buttons;
+    }
+    if (!rt.touch_active && rt.mouse_visible) {
+        surface_presentation_cursor(&rt.presentation, __atomic_load_n(&rt.mouse_shape, __ATOMIC_ACQUIRE),
+                                    prefs.size, rt.pointer.x, rt.pointer.y);
+    } else if (rt.presentation.mark_on == 2) {
+        surface_presentation_cursor(&rt.presentation, -1, 0, 0, 0);
+    }
+    return posted;
 }
 
 int surface_desktop_input_ready(void *unused)
@@ -740,12 +884,14 @@ static int take_input(void *arg)
     unsigned tail = devices.tail;
 
     if (tail == devices.head) return 0;
+    int mouse = devices.from_mouse[tail % SURFACE_DESKTOP_EVENTS];
     *event = devices.events[tail % SURFACE_DESKTOP_EVENTS];
     tail++;
     /* A move with another move queued behind it is dropped for the later
      * one: the desktop sees where the contact is now, not where it was
      * while a frame was drawn. */
     while (event->type == TIKU_EVENT_POINTER_MOVE && tail != devices.head &&
+           devices.from_mouse[tail % SURFACE_DESKTOP_EVENTS] == mouse &&
            devices.events[tail % SURFACE_DESKTOP_EVENTS].type == TIKU_EVENT_POINTER_MOVE) {
         *event = devices.events[tail % SURFACE_DESKTOP_EVENTS];
         tail++;
@@ -755,12 +901,12 @@ static int take_input(void *arg)
         devices.down_serial = devices.serial;
         devices.down_taken = 1;
     }
-    return 1;
+    return mouse ? 2 : 1;
 }
 
 int surface_desktop_input(tiku_input_event_t *event)
 {
-    return surface_desktop_input_ready(NULL) && surface_os_desktop_call(take_input, event) == 1;
+    return surface_desktop_input_ready(NULL) ? surface_os_desktop_call(take_input, event) : 0;
 }
 
 int surface_runtime_keys(const char *text, size_t length)
@@ -781,6 +927,7 @@ int surface_runtime_keys(const char *text, size_t length)
             key.key = 'c';
             key.modifiers = TIKU_MOD_CMD;
         } else key.text[0] = (char)c;
+        devices.from_mouse[(head + i) % SURFACE_DESKTOP_EVENTS] = 0;
         devices.events[(head + i) % SURFACE_DESKTOP_EVENTS] = key;
     }
     __atomic_store_n(&devices.head, head + (unsigned)length, __ATOMIC_RELEASE);
@@ -892,24 +1039,6 @@ int surface_runtime_drag(unsigned x0, unsigned y0, unsigned x1, unsigned y1)
     return 1;
 }
 
-/** @brief The primary contact as panel coordinates, by the calibration. */
-static void map_point(unsigned rx, unsigned ry, int *x, int *y)
-{
-    const surface_touch_map_t *m = &rt.map;
-    uint32_t dx = m->x_max - m->x_min, dy = m->y_max - m->y_min;
-    uint32_t px = rx < m->x_min ? 0u : rx > m->x_max ? dx : rx - m->x_min;
-    uint32_t py = ry < m->y_min ? 0u : ry > m->y_max ? dy : ry - m->y_min;
-
-    if (m->swap) {
-        uint32_t t = px; px = py; py = t;
-        t = dx; dx = dy; dy = t;
-    }
-    *x = (int)((px * 799u + dx / 2u) / dx);
-    *y = (int)((py * 479u + dy / 2u) / dy);
-    if (m->invert_x) *x = 799 - *x;
-    if (m->invert_y) *y = 479 - *y;
-}
-
 /** @brief The finger left the panel: release the pointer where it is. */
 static void release(uint64_t now)
 {
@@ -932,6 +1061,7 @@ static int touch(const surface_touch_report_t *r, uint64_t now)
     unsigned i, primary;
 
     rt.input.reports++;
+    if (rt.mouse_buttons) return 0;
     if (r->cancel || r->count > SURFACE_TOUCH_CONTACTS) {
         rt.input.errors++;
         if (rt.touch_active) {
@@ -963,7 +1093,7 @@ static int touch(const surface_touch_report_t *r, uint64_t now)
     {
         int x, y;
 
-        map_point(r->points[primary].x, r->points[primary].y, &x, &y);
+        surface_touch_map_point(&rt.map, r->points[primary].x, r->points[primary].y, &x, &y);
         return contact(x, y, r->points[primary].id, now);
     }
 }
@@ -971,6 +1101,8 @@ static int touch(const surface_touch_report_t *r, uint64_t now)
 /** @brief The primary contact at panel point (@p x, @p y) as pointer events. */
 static int contact(int x, int y, unsigned id, uint64_t now)
 {
+    if (rt.mouse_buttons) return 0;
+    rt.mouse_visible = 0;
 #if SURFACE_TOUCH_MODE
     int px = rt.touch_x, py = rt.touch_y, event;
 
@@ -1057,8 +1189,7 @@ static int scan_convert_poll(void *context)
     return result == SURFACE_SCANOUT_BUSY ? 1 : result == SURFACE_SCANOUT_OK ? 0 : -1;
 }
 
-#if SURFACE_TOUCH_MODE
-/** @brief Make the touch mark drawn into the buffer on show visible. */
+/** @brief Make the pointer mark drawn into the buffer on show visible. */
 static int scan_amend(void *context, unsigned buffer, tiku_rect_t r)
 {
     (void)context;
@@ -1068,10 +1199,7 @@ static int scan_amend(void *context, unsigned buffer, tiku_rect_t r)
 
 static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, scan_amend, scan_convert,
                                                 scan_convert_poll };
-#else
-static const surface_scanout_ops_t scanout = { scan_submit, scan_poll, NULL, scan_convert,
-                                                scan_convert_poll };
-#endif
+
 
 /** @brief The presentation lease ends: the frame is on the panel, or failed. */
 int tiku_framebuffer_complete(tiku_framebuffer_t *owner, uint64_t token,
@@ -1213,6 +1341,7 @@ static void desktop_thread(void *arg)
     int code;
 
     (void)arg;
+    surface_mouse_load();
     surface_desktop_selftest();
     surface_board_selftest();
     code = surface_desktop_main(1, argv);
@@ -1225,6 +1354,7 @@ static void desktop_thread(void *arg)
 void surface_desktop_memory(surface_desktop_memory_t *m)
 {
     m->psram = rt.psram;
+    m->top_store = rt.psram_top_store;
     m->below = rt.psram_below;
     m->tier = rt.psram_tier;
     m->spare = rt.psram_spare;
@@ -1249,17 +1379,18 @@ int surface_runtime_start(void)
     memset(&devices, 0, sizeof devices);
     memset(&surface_desktop_bridge, 0, sizeof surface_desktop_bridge);
     memset(&rt, 0, sizeof rt);
+    rt.pointer = (surface_mouse_position_t){.x = SURFACE_DESKTOP_W / 2, .y = SURFACE_DESKTOP_H / 2};
     rt.sample_dump = UINT32_MAX;
     rt.stacks_dump = UINT32_MAX;
     rt.rgb[0] = (uint16_t *)frames;
-    rt.rgb[1] = (uint16_t *)(frames + RGB_BYTES);
-    memset(rt.rgb[0], 0, 2u * RGB_BYTES);
+    rt.rgb[1] = (uint16_t *)(frames + SURFACE_SCANOUT_BYTES);
+    memset(rt.rgb[0], 0, 2u * SURFACE_SCANOUT_BYTES);
     /* The panel opens on the frames before the rest is reserved: its
      * driver returns its own scan-out buffer to the PSRAM tier when it is
      * handed them, and the rest takes that room. */
     if (!surface_os_display_open(rt.rgb[0], rt.rgb[1]) ||
-        !surface_presentation_init(&rt.presentation, rt.rgb[0], RGB_BYTES, rt.rgb[1],
-                                   RGB_BYTES, 0, 4096, &rt.sequence, &scanout, NULL)) {
+        !surface_presentation_init(&rt.presentation, rt.rgb[0], SURFACE_SCANOUT_BYTES, rt.rgb[1],
+                                   SURFACE_SCANOUT_BYTES, 0, 4096, &rt.sequence, &scanout, NULL)) {
         rt.failed = 1;
         return 0;
     }
@@ -1272,6 +1403,7 @@ int surface_runtime_start(void)
      * owner, the tier's free bytes again with each status line. */
     if (surface_os_psram_extent(&rt.psram, &rt.psram_below, &rt.psram_tier, &rt.psram_spare) != 0)
         rt.psram = rt.psram_below = rt.psram_tier = rt.psram_spare = 0;
+    rt.psram_top_store = surface_os_psram_top_store();
     rt.span = span;
     stack = span;
     jobs = stack + STACK_BYTES;
@@ -1372,6 +1504,8 @@ int surface_runtime_poll(void)
             woke = 1;
         }
     }
+    woke |= mouse_input(begin);
+    woke |= poll_paint();
     take_frame();
     while (rt.presenting && surface_os_time() - begin < PRESENT_TURN_US) {
         unsigned before = rt.presentation.phase;
@@ -1460,7 +1594,7 @@ int surface_runtime_poll(void)
                      " heap=%lu/%lu refused=%lu/%lu stack=%lu/%lu jobs=%lu/%lu canary=%u locks=%u/%u/%u"
                      " writes=%lu/%lu/%lu:%.24s"
                      " up_ms=%lu frame_us=%lu/%lu input_us=%lu phases=%lu/%lu/%lu px=%lu convert_cpu=%lu"
-                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu ring_lost=%lu"
+                     " card=%lu/%lu/%lu/%lu/%lu mutations=%lu ppa=%lu/%lu/%lu/%lu paint=%lu/%lu/%lu ring_lost=%lu"
                      " camera=%lu/%lu/%lu\n",
                      (unsigned long)rt.turns, (unsigned long)b->frames, (unsigned long)b->waits,
                      devices.head, devices.tail, (unsigned long)devices.serial,
@@ -1480,7 +1614,8 @@ int surface_runtime_poll(void)
                      (unsigned long)card_polls, (unsigned long)card_last_us, (unsigned long)card_max_us,
                      (unsigned long)(card_total_us / 1000u), (unsigned long)mutations,
                      (unsigned long)ppa_jobs, (unsigned long)ppa_failed,
-                     (unsigned long)ppa_wakes, (unsigned long)ppa_us, surface_board_lost(),
+                     (unsigned long)ppa_wakes, (unsigned long)ppa_us, (unsigned long)fills_done,
+                     (unsigned long)blits_done, (unsigned long)paints_failed, surface_board_lost(),
                      (unsigned long)(devices.picture >> 1), (unsigned long)__atomic_load_n(&devices.drawn, __ATOMIC_RELAXED),
                      (unsigned long)__atomic_load_n(&devices.draw_us, __ATOMIC_RELAXED));
         if (n > 0) surface_os_desktop_print(line, (size_t)n < sizeof line ? (size_t)n : sizeof line - 1u);

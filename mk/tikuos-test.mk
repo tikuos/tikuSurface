@@ -539,9 +539,9 @@ desktop-requests-test: $(BUILD)/test-desktop-requests
 	$<
 	python3 tests/tikuos/test_desktop_hash.py "$(TIKUOS_ROOT)"
 
-$(BUILD)/test-desktop-requests: tests/tikuos/test_desktop_requests.c desktop/runtime.c desktop/host.c desktop/bridge.h desktop/bridge_os.h shell/settings.c | $(BUILD)
+$(BUILD)/test-desktop-requests: tests/tikuos/test_desktop_requests.c desktop/runtime.c desktop/host.c desktop/mouse_motion.c desktop/mouse.h desktop/bridge.h desktop/bridge_os.h shell/settings.c | $(BUILD)
 	$(CC) $(MEDIA_INCLUDES) -std=gnu11 -Wall -Wextra -Werror $(CFLAGS) -ffunction-sections -fdata-sections \
 	    -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 \
 	    -I$(SDK_ROOT)/include -Ifoundation/packages/shell/system/deskbar -Ifoundation/packages/shell/system/shared/ui \
 	    $(addprefix -Ifoundation/kits/,storage support interface device) \
-	    $< desktop/host.c shell/settings.c -Wl,--gc-sections -pthread -o $@
+	    $< desktop/host.c desktop/mouse_motion.c shell/settings.c -Wl,--gc-sections -pthread -o $@

@@ -74,6 +74,61 @@ int surface_os_display_convert(unsigned back, const void *pixels, unsigned strid
 int surface_os_display_convert_poll(void) { abort(); }
 int surface_os_display_poll(uint64_t token) { (void)token; abort(); }
 
+static _Alignas(64) uint32_t paint_pixels[256 * 97], paint_source[257 * 97];
+static unsigned paint_polls;
+static int paint_fails;
+
+int surface_os_display_paint(uint32_t *pixels, unsigned stride, const uint32_t *source,
+                             unsigned src_stride, unsigned width, unsigned height, uint32_t color)
+{
+    assert(dispatching && pixels == paint_pixels + 16 && stride == 256);
+    assert(width == 224 && height == 95);
+    assert(!source || (source == paint_source + 13 && src_stride == 257));
+    for (unsigned y = 0; y < height; ++y)
+        for (unsigned x = 0; x < width; ++x)
+            pixels[y*stride+x] = source ? source[y*src_stride+x] : color;
+    paint_polls = 0;
+    return 1;
+}
+
+int surface_os_display_paint_poll(void)
+{
+    assert(!dispatching);
+    if (!paint_polls++) return SURFACE_SCANOUT_BUSY;
+    return paint_fails ? SURFACE_SCANOUT_ERROR : SURFACE_SCANOUT_OK;
+}
+
+static void advance_paint(void) { (void)poll_paint(); }
+
+static void raster_edges(void)
+{
+    for (unsigned i = 0; i < 257*97; ++i) paint_source[i] = 0x45908000u + i;
+    for (int copy = 0; copy < 2; ++copy) {
+        memset(paint_pixels, 0, sizeof paint_pixels);
+        waits = 0;
+        advance = advance_paint;
+        int ok = copy ? tiku_gfx_native_blit(paint_pixels+3, 256, paint_source, 257, 246, 95)
+                      : tiku_gfx_native_fill(paint_pixels+3, 256, 246, 95, 0x1234abcd);
+        assert(ok && paint_polls == 2 && !active_paint);
+        for (unsigned y = 0; y < 97; ++y) {
+            for (unsigned x = 0; x < 256; ++x) {
+                uint32_t expected = 0;
+                if (y < 95 && x >= 3 && x < 249)
+                    expected = copy ? paint_source[y*257+x-3] : 0x1234abcdu;
+                assert(paint_pixels[y*256+x] == expected);
+            }
+        }
+    }
+    paint_fails = 1;
+    waits = 0;
+    assert(!tiku_gfx_native_fill(paint_pixels+3, 256, 246, 95, 0));
+    assert(!active_paint && paint_polls == 2);
+    int calls = dispatches;
+    assert(!tiku_gfx_native_fill(paint_pixels, 256, 3, 4, 0));
+    assert(!tiku_gfx_native_fill(paint_pixels, 255, 246, 95, 0));
+    assert(dispatches == calls);
+}
+
 static void advance_frame(void)
 {
     take_frame();
@@ -139,6 +194,32 @@ int surface_os_camera_encode_poll(uint32_t *len)
     return SURFACE_CAMERA_OK;
 }
 
+static int mouse_source;
+void surface_desktop_pointer_source(int mouse) { mouse_source = mouse; }
+
+static const int mouse_samples[][4] = {
+    {0,0,0,1}, {80,-40,0,1}, {-16,7,0,1}, {8,-4,2,1}, {0,0,0,0}
+};
+static unsigned samples_ready;
+int surface_os_mouse_read(uint32_t *sequence, int *dx, int *dy, unsigned *buttons, int *connected)
+{
+    if (*sequence == samples_ready) return 0;
+    const int *sample = mouse_samples[(*sequence)++];
+    *dx = sample[0]; *dy = sample[1]; *buttons = (unsigned)sample[2]; *connected = sample[3];
+    return 1;
+}
+
+surface_mouse_settings_t surface_mouse_settings(void)
+{
+    return (surface_mouse_settings_t){SURFACE_MOUSE_NORMAL, SURFACE_CURSOR_NORMAL};
+}
+
+void surface_presentation_cursor(surface_presentation_t *p, int shape, int size, int x, int y)
+{
+    p->mark_x = x; p->mark_y = y; p->cursor_size = size;
+    p->mark_on = shape < 0 ? 0 : 2;
+}
+
 static unsigned hashed;
 void surface_desktop_hash_file(const char *path)
 {
@@ -181,6 +262,26 @@ int main(void)
     assert(tiku_host_poll(host, &event) && event.type == TIKU_EVENT_POINTER_UP);
     assert(!tiku_host_poll(host, &event) && dispatches == before + 3);
 
+    assert(!mouse_source);
+    rt.pointer = (surface_mouse_position_t){.x=400,.y=240};
+    samples_ready = 2;
+    assert(mouse_input(8) && rt.presentation.mark_on == 2);
+    assert(tiku_host_poll(host, &event) && mouse_source && event.type == TIKU_EVENT_POINTER_MOVE);
+    assert(event.x == 480 && event.y == 200);
+    assert(rt.presentation.mark_x == event.x && rt.presentation.mark_y == event.y);
+    assert(rt.presentation.cursor_size == 16 && !tiku_host_poll(host, &event));
+    samples_ready = 3;
+    assert(mouse_input(9) && tiku_host_poll(host, &event));
+    assert(event.type == TIKU_EVENT_POINTER_MOVE && event.x == 464 && event.y == 207);
+    assert(!tiku_host_poll(host, &event));
+    samples_ready = 4;
+    assert(mouse_input(10) && tiku_host_poll(host, &event));
+    assert(event.type == TIKU_EVENT_POINTER_MOVE && event.x == 472 && event.y == 203);
+    assert(tiku_host_poll(host, &event) && event.type == TIKU_EVENT_POINTER_DOWN && event.button == 3);
+    samples_ready = 5;
+    assert(mouse_input(11) && rt.presentation.mark_on == 0);
+    assert(tiku_host_poll(host, &event) && event.type == TIKU_EVENT_POINTER_UP && event.button == 3);
+
     surface_media_io_t io = {0};
     surface_desktop_card(&io);
     assert(io.result == SURFACE_MEDIA_UNAVAILABLE);
@@ -208,6 +309,7 @@ int main(void)
     assert(hashed == 1 && surface_runtime_hash("/Card/example", 13));
     surface_desktop_hash_poll();
     assert(hashed == 2);
+    raster_edges();
     puts("Native device requests passed");
     return 0;
 }

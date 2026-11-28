@@ -6,8 +6,13 @@
  */
 #ifndef TIKU_SHELL_PRODUCT_H_
 #define TIKU_SHELL_PRODUCT_H_
+#include "surface_panel.h"
 /** @brief Enable board namespace, channel and device services. */
 #define TIKU_SHELL_BOARD_SERVICES 0
+#if defined(TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD) && TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD
+/** @brief Present menus and window changes in the first frame on the P4X panel. */
+#define TIKU_SHELL_REDUCE_MOTION_DEFAULT 1
+#endif
 #ifndef SURFACE_TOUCH_MODE
 #define SURFACE_TOUCH_MODE 1
 #endif
@@ -24,6 +29,8 @@
 #include <stddef.h>
 struct tiku_backend *surface_board_open(char *name, size_t max);
 #define TIKU_SHELL_LOCAL_BOARD surface_board_open
+void surface_about_system_release(char *out, size_t size);
+#define TIKU_SHELL_ABOUT_SYSTEM_RELEASE surface_about_system_release
 #endif
 /** @brief Enable remote text input, accessibility, links and printing. */
 #define TIKU_SHELL_REMOTE_SERVICES 0
@@ -34,10 +41,10 @@ struct tiku_backend *surface_board_open(char *name, size_t max);
 #define TIKU_SHELL_RESOURCE_PUBLICATION 0
 /** @brief Input events carry their time on the desktop's clock. */
 #define TIKU_SHELL_EVENT_TIME 1
-/** @brief Desktop surface width in pixels: the S31 panel. */
-#define TIKU_SHELL_SCREEN_W 800
-/** @brief Desktop surface height in pixels: the S31 panel. */
-#define TIKU_SHELL_SCREEN_H 480
+/** @brief Desktop surface width in panel pixels. */
+#define TIKU_SHELL_SCREEN_W SURFACE_DESKTOP_W
+/** @brief Desktop surface height in panel pixels. */
+#define TIKU_SHELL_SCREEN_H SURFACE_DESKTOP_H
 /** @brief Maximum advertised content types per application handler. */
 #define TIKU_SHELL_APP_TYPES_MAX 8
 /** @brief Font size of the name in the About window. */

@@ -3,6 +3,7 @@
  * settings.c - checked coordinate records independent of storage layout.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "../system/product/surface_panel.h"
 #include "settings.h"
 #include "touch.h"
 #include <string.h>
@@ -26,7 +27,7 @@ int surface_settings_encode(const surface_touch_map_t *m, unsigned char out[SURF
     if (!out || !surface_touch_map_valid(m)) return 0;
     memset(out, 0, SURFACE_SETTINGS_BYTES);
     memcpy(out, "TSCL", 4); out[4] = 1; out[5] = SURFACE_SETTINGS_BYTES;
-    put16(out + 6, 800); put16(out + 8, 480);
+    put16(out + 6, SURFACE_DESKTOP_W); put16(out + 8, SURFACE_DESKTOP_H);
     put16(out + 10, m->x_min); put16(out + 12, m->x_max);
     put16(out + 14, m->y_min); put16(out + 16, m->y_max);
     out[18] = m->swap; out[19] = m->invert_x; out[20] = m->invert_y;
@@ -41,7 +42,7 @@ unsigned surface_settings_decode(const unsigned char *data, unsigned n, surface_
     uint32_t crc = 0;
     for (unsigned i = 0; i < 4; ++i) crc |= (uint32_t)data[28 + i] << (8u * i);
     if (checksum(data, 28) != crc) return SURFACE_SETTINGS_CORRUPT;
-    if (data[4] != 1 || data[5] != SURFACE_SETTINGS_BYTES || get16(data + 6) != 800 || get16(data + 8) != 480)
+    if (data[4] != 1 || data[5] != SURFACE_SETTINGS_BYTES || get16(data + 6) != SURFACE_DESKTOP_W || get16(data + 8) != SURFACE_DESKTOP_H)
         return SURFACE_SETTINGS_INCOMPATIBLE;
     for (unsigned i = 21; i < 28; ++i) if (data[i]) return SURFACE_SETTINGS_INCOMPATIBLE;
     surface_touch_map_t m = {get16(data + 10), get16(data + 12), get16(data + 14), get16(data + 16),
@@ -97,9 +98,9 @@ int surface_touch_map_refit(const surface_touch_map_t *map, const int edge[4],
         map->swap > 1 || map->invert_x > 1 || map->invert_y > 1) return 0;
     m = *map;
     /* With swap the screen's x comes from the controller's y bounds. */
-    refit_axis(m.swap ? &m.y_min : &m.x_min, m.swap ? &m.y_max : &m.x_max, 799,
+    refit_axis(m.swap ? &m.y_min : &m.x_min, m.swap ? &m.y_max : &m.x_max, (SURFACE_DESKTOP_W - 1),
         edge[0], edge[1], m.invert_x);
-    refit_axis(m.swap ? &m.x_min : &m.y_min, m.swap ? &m.x_max : &m.y_max, 479,
+    refit_axis(m.swap ? &m.x_min : &m.y_min, m.swap ? &m.x_max : &m.y_max, (SURFACE_DESKTOP_H - 1),
         edge[2], edge[3], m.invert_y);
     if (m.x_min >= m.x_max || m.y_min >= m.y_max) return 0;
     *out = m;

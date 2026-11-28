@@ -12,8 +12,11 @@
 #include <fcntl.h>
 #include "tiku_app_product.h"
 #include "terminal.h"
+#include "touch_preferences.h"
 #include "tiku_image_window.h"
 #include "tiku_trk_builtin.h"
+tiku_window_t *surface_mouse_preferences_open(tiku_workspace_t *, tiku_rect_t, int *, const char *);
+
 /* TikuImage's viewer, made at its first open and kept while its window
  * closes and opens again. */
 static tiku_image_window_t *viewer;
@@ -83,6 +86,12 @@ static int basic_start(void)
 const tiku_trk_builtin_t *tiku_trk_builtins(int *count)
 {
     static const tiku_trk_builtin_t list[] = {
+        {.id = "mouse-prefs", .name = "Mouse", .icon = "folder_prefs",
+         .category = "settings", .open = surface_mouse_preferences_open},
+#if SURFACE_TOUCH_MODE
+        {.id = "touch-prefs", .name = "Touch", .icon = "folder_prefs",
+         .category = "settings", .open = surface_touch_preferences_open},
+#endif
         {"camera", "Camera", "image/png,image/jpeg,image/bmp,image/x-ms-bmp",
          "camera", "graphics", camera_entry, camera_tick, NULL},
         {"recorder", "Sound Recorder", "audio/wav,audio/x-wav", "sound_recorder", "audio",

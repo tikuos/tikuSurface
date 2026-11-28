@@ -13,6 +13,7 @@
 
 /* The kernel's microphone: enable, dropped and /dev/mic, whose reads hand
  * out the next samples of a running count. */
+surface_desktop_bridge_t surface_desktop_bridge;
 enum { FD_ENABLE = 3, FD_MIC, FD_DROPPED };
 static int enabled, enable_err, mic_open, mic_fail, opened_path;
 static unsigned waiting, starts_seen, stops_seen, dropped;
@@ -221,7 +222,8 @@ int main(void)
     assert(enabled_button(REC_RECORD) == 0);
     run_jobs();
     assert(!rec.saving && strstr(rec.status, "Saved recording-") && rec.nfiles == 1);
-    assert(!strstr(rec.status, "lost"));
+    assert(!strstr(rec.status, "lost") && strstr(rec.status, "in RAM until reset"));
+    surface_desktop_bridge.card_mounted = 1;
     snprintf(path, sizeof path, "%s/%s", dir, rec.files[0].name);
     assert(check_wav(path, 0) == 78000 && rec.files[0].bytes == 44u + 156000u);
     assert(rec.selected == 0);
@@ -271,6 +273,7 @@ int main(void)
     assert(strstr(rec.status, "some audio was lost"));
     run_jobs();
     assert(strstr(rec.status, "Saved recording-") && strstr(rec.status, "audio was lost"));
+    assert(!strstr(rec.status, "until reset"));
     dropped = 0;
     press(REC_RECORD);
     press(REC_STOP);

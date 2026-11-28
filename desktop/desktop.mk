@@ -9,7 +9,8 @@
 DESKTOP_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))..)
 DESKTOP_FOUNDATION ?= $(DESKTOP_ROOT)/foundation
 DESKTOP_ASSETS ?=
-DESKTOP_BUILD ?= build/desktop-s31
+DESKTOP_BOARD ?= $(if $(BOARD),$(BOARD),esp32s31_korvo1)
+DESKTOP_BUILD ?= build/desktop-$(if $(filter esp32_p4x_function_ev_board,$(DESKTOP_BOARD)),p4x,s31)
 DESKTOP_CC ?= $(CROSS_COMPILE)gcc
 DESKTOP_AR ?= $(CROSS_COMPILE)ar
 ifeq ($(DESKTOP_ASSETS),)
@@ -33,6 +34,10 @@ DESKTOP_INCLUDES := $(addprefix -I$(F)/kits/,support device storage interface tr
     -I$(DESKTOP_ROOT)/system/product -I$(DESKTOP_ASSETS)/kits/translation -I$(DESKTOP_ROOT)/desktop \
     -I$(DESKTOP_ROOT)/desktop/compat $(addprefix -I,$(wildcard $(F)/kits/*/portable)) \
     -I$(abspath compat/posix) -idirafter $(abspath .)
+ifeq ($(DESKTOP_BOARD),esp32_p4x_function_ev_board)
+DESKTOP_BOARD_FLAGS := -DTIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD=1
+SURFACE_PPA_PAINT ?= $(if $(filter 0,$(SURFACE_PPA)),0,1)
+endif
 DESKTOP_ARCH ?= -march=rv32imafc_zicsr_zifencei -mabi=ilp32f
 # Bounds the shared shell sizes for a desktop computer, set for the panel's
 # PSRAM: entries per folder view, the largest state file an update reads,
@@ -57,7 +62,7 @@ DESKTOP_LIMITS := -DTIKU_TRK_POSES_MAX=256 -DTIKU_STATE_UPDATE_BYTES=262144 \
 SURFACE_TOUCH_MODE ?= 1
 # TIKU_STATE_XATTR: Stomme's state kit keeps folder views and icon places as
 # extended attributes, which desktop/posix.c answers.
-DESKTOP_CFLAGS := $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOURCE \
+DESKTOP_CFLAGS := $(DESKTOP_BOARD_FLAGS) $(DESKTOP_ARCH) -Os -g -std=gnu11 -D_DEFAULT_SOURCE -D_GNU_SOURCE \
     -ffunction-sections -fdata-sections -fstack-usage -Wall -Wno-unused-parameter \
     -DTIKU_SURFACE_TIKUOS=1 -DSURFACE_NATIVE_DESKTOP=1 -DSURFACE_LCD_ENABLE=1 -DTIKU_WORK_WORKERS=1 \
     -DSURFACE_TOUCH_MODE=$(SURFACE_TOUCH_MODE) \
@@ -89,6 +94,11 @@ $(DESKTOP_GEN)/tiku_sdk_identity.h:
 	@mkdir -p $(@D)
 	@printf '#define TIKU_SDK_IDENTITY "tikusurface-desktop"\n#define TIKU_FOUNDATION_REVISION "%s"\n#define TIKU_SDK_HOST "tikuos"\n' \
 	    "$$(git -C $(F) rev-parse HEAD)" > $@
+DESKTOP_WALLPAPERS := $(sort $(wildcard $(DESKTOP_ASSETS)/assets/system/wallpapers/*.jpg))
+$(DESKTOP_GEN)/surface_wallpapers.h: $(DESKTOP_WALLPAPERS) $(DESKTOP_ROOT)/desktop/wallpapers.py $(wildcard $(DESKTOP_ASSETS)/assets/system/wallpapers)
+	@mkdir -p $(@D)
+	python3 $(DESKTOP_ROOT)/desktop/wallpapers.py $(DESKTOP_WALLPAPERS) > $@.tmp && mv $@.tmp $@
+$(DESKTOP_BUILD)/platform/posix.o: $(DESKTOP_GEN)/surface_wallpapers.h
 $(DESKTOP_GEN)/tiku_strings_default.h: $(DESKTOP_ASSETS)/assets/strings/en.xml
 	@mkdir -p $(@D)
 	python3 $(F)/kits/support/tools/genstrings.py $< > $@.tmp && mv $@.tmp $@
@@ -108,6 +118,7 @@ $(DESKTOP_BUILD)/apps/apps/terminal/tiku_term.o: private DESKTOP_CFLAGS += -DTIK
 $(DESKTOP_BUILD)/apps/%.o: $(F)/packages/apps/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_APP_INCLUDES) $(DESKTOP_FORMAT_CFLAGS) -MMD -MP -c -o $@ $<
+$(DESKTOP_BUILD)/kits/interface/tiku_gfx.o: private DESKTOP_CFLAGS += -DTIKU_GFX_NATIVE_RASTER=$(if $(filter 0,$(SURFACE_PPA_PAINT)),0,1)
 $(DESKTOP_BUILD)/kits/%.o: $(F)/kits/%.c $(DESKTOP_HEADERS)
 	@mkdir -p $(@D)
 	$(DESKTOP_CC) $(DESKTOP_CFLAGS) $(DESKTOP_FORMAT_CFLAGS) -MMD -MP -c -o $@ $<
@@ -142,7 +153,7 @@ $(DESKTOP_ARCHIVE): $(DESKTOP_OBJS)
 desktop-objects: $(DESKTOP_OBJS)
 desktop-archive: $(DESKTOP_ARCHIVE)
 # Objects rebuild when the compile flags change.
-DESKTOP_FLAGS_STAMP := $(DESKTOP_BUILD)/flags-$(shell printf '%s' '$(DESKTOP_CFLAGS)' | sha1sum | cut -c1-16)
+DESKTOP_FLAGS_STAMP := $(DESKTOP_BUILD)/flags-$(shell printf '%s' '$(DESKTOP_CFLAGS) $(SURFACE_PPA_PAINT)' | sha1sum | cut -c1-16)
 $(DESKTOP_FLAGS_STAMP):
 	@mkdir -p $(dir $@)
 	@rm -f $(DESKTOP_BUILD)/flags-*

@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/** @brief Take one kernel mouse report on the owner thread, in raw device counts. */
+int surface_os_mouse_read(uint32_t *sequence, int *dx, int *dy, unsigned *buttons, int *connected);
 /** @brief Run a short callback in kernel context and return its result. */
 int surface_os_desktop_call(int (*fn)(void *), void *context);
 /** @brief Start the desktop worker on a caller-owned stack; 0 on success.
@@ -80,6 +82,8 @@ size_t surface_os_desktop_heap_live(void);
  *         size and its bytes not reserved; 0, or -1 without a tier.  Kernel
  *         owner only. */
 int surface_os_psram_extent(size_t *size, size_t *below, size_t *tier, size_t *spare);
+/** @brief Bytes occupied by a mounted file store at the top of PSRAM. */
+size_t surface_os_psram_top_store(void);
 /** @brief Mutexes and condition variables in use, and those refused for a
  *         full table; a refused lock leaves its caller unlocked. */
 void surface_os_desktop_lock_use(unsigned *mutexes, unsigned *conds, unsigned *refused);

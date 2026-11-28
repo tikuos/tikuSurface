@@ -5,6 +5,7 @@
  */
 #include "build_identity.h"
 #include "runtime.h"
+#include "../../shell/touch_map.h"
 #include "surface.h"
 #if SURFACE_LCD_ENABLE
 #include "display.h"
@@ -337,7 +338,7 @@ int surface_runtime_start(void)
     if (surface_os_media_size() > sizeof state->media_bridge) goto fail;
     surface_os_media_init(state->media_bridge);
     config.storage = surface_media_init(&state->media, state->media_bridge);
-    state->saved_map = (surface_touch_map_t){0, 799, 0, 479, 0, 0, 0};
+    state->saved_map = surface_touch_map_default();
     unsigned char record[SURFACE_SETTINGS_BYTES]; size_t length = 0;
     int loaded = surface_os_settings_read(record, sizeof record, &length);
     state->settings_status = surface_settings_load(loaded, record, (unsigned)length, &state->saved_map);

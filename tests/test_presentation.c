@@ -203,6 +203,20 @@ static void marks(void)
     flip(&p, frame, presenter, (tiku_rect_t){0, 0, 1, 1});
     assert(!memcmp(scanout[0], expected, sizeof expected) && !memcmp(scanout[1], expected, sizeof expected));
 
+    /* A mouse crossing the bottom edge leaves the pixels under its old
+     * position intact; removing it restores its last hotspot too. */
+    surface_presentation_cursor(&p, 0, 32, 799, 479);
+    assert(scanout[p.front][479 * 800 + 799] == 0);
+    surface_presentation_cursor(&p, 0, 32, 0, 0);
+    assert(amended.w == 32 && amended.h == 32);
+    assert(scanout[p.front][24 * 800 + 2] == 0);
+    surface_presentation_cursor(&p, 0, 12, 0, 0);
+    assert(scanout[p.front][24 * 800 + 2] == expected[24 * 800 + 2]);
+    assert(scanout[p.front][479 * 800 + 799] == 0xffff);
+    assert(scanout[p.front][0] == 0);
+    surface_presentation_cursor(&p, -1, 0, 0, 0);
+    assert(scanout[p.front][0] == 0xffff);
+
     /* Without an amend operation no mark is drawn. */
     assert(surface_presentation_init(&p, scanout[0], sizeof scanout[0], scanout[1], sizeof scanout[1],
         p.front, 4096, &sequence, &ops, NULL));

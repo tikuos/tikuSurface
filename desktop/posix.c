@@ -1202,8 +1202,12 @@ _ssize_t _write(int fd, const void *buf, size_t n);
 int _close(int fd);
 int _stat(const char *path, struct stat *st);
 
-/** @brief Create @p path with @p text and @p mode, making its directories. */
-static void seed(const char *path, const char *text, mode_t mode)
+#ifdef SURFACE_NATIVE_DESKTOP
+#include "surface_wallpapers.h"
+#endif
+
+/** @brief Create a desktop file and its parent directories. */
+static void seed_bytes(const char *path, const void *data, size_t size, mode_t mode)
 {
     char dir[PATH_MAX];
     char *slash;
@@ -1218,9 +1222,15 @@ static void seed(const char *path, const char *text, mode_t mode)
     /* The layer's own calls: the C library's open() reaches them too. */
     fd = _open(path, O_WRONLY | O_CREAT | O_TRUNC, (int)mode);
     if (fd >= 0) {
-        (void)_write(fd, text, strlen(text));
+        (void)_write(fd, data, size);
         (void)_close(fd);
     }
+}
+
+/** @brief Seed a text file with the bytes preceding its terminating NUL. */
+static void seed(const char *path, const char *text, mode_t mode)
+{
+    seed_bytes(path, text, strlen(text), mode);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -1262,6 +1272,10 @@ static int surface_desktop_files_locked(void)
     }
     (void)make_dirs("/home/.config/tracker/Desktop");
     (void)make_dirs("/system/deskbar");
+#ifdef SURFACE_NATIVE_DESKTOP
+    for (size_t i = 0; i < sizeof wallpapers / sizeof wallpapers[0]; i++)
+        seed_bytes(wallpapers[i].path, wallpapers[i].data, wallpapers[i].size, 0444);
+#endif
     (void)make_dirs("/system/apps");
     (void)make_dirs("/tmp");
     seed("/proc/partitions", "major minor  #blocks  name\n", 0644);

@@ -17,7 +17,12 @@
 #include <kernel/timers/tiku_clock.h>
 #include <kernel/vfs/tiku_vfs.h>
 #include <services/console/tiku_console.h>
+#if defined(TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD)
+#include <arch/esp32p4/tiku_psram_arch.h>
+#include <kernel/vfs/tree/tiku_vfs_tree_data.h>
+#else
 #include <arch/esp32s31/tiku_psram_arch.h>
+#endif
 #include <kernel/memory/tiku_mem.h>
 #include <malloc.h>
 #include <services/storage/tiku_media_card.h>
@@ -154,10 +159,27 @@ int surface_os_psram_extent(size_t *size, size_t *below, size_t *tier, size_t *s
 
     if (!tiku_thread_in_kernel() ||
         tiku_tier_span_stats(TIKU_MEM_PSRAM, 0, &base, &stats) != TIKU_MEM_OK) return -1;
+#if defined(TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD)
+    *size = tiku_p4_psram_size();
+    *below = (size_t)((uintptr_t)base - TIKU_P4_PSRAM_BASE);
+#else
     *size = tiku_s31_psram_size();
     *below = (size_t)((uintptr_t)base - TIKU_S31_PSRAM_BASE);
+#endif
     *tier = stats.total_bytes;
     *spare = stats.total_bytes > stats.used_bytes ? stats.total_bytes - stats.used_bytes : 0u;
+    return 0;
+}
+
+size_t surface_os_psram_top_store(void)
+{
+#if defined(TIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD)
+    const tiku_tfs_t *store = tiku_vfs_tree_data_store();
+    uintptr_t end = TIKU_P4_PSRAM_BASE + tiku_p4_psram_size();
+    if (store && store->mounted && store->be && store->be->size <= end - TIKU_P4_PSRAM_BASE &&
+        (uintptr_t)store->be->base == end - store->be->size)
+        return store->be->size;
+#endif
     return 0;
 }
 
@@ -203,4 +225,24 @@ int surface_os_clock_state(void)
     default:
         return SURFACE_CLOCK_UNSET;
     }
+}
+
+#if TIKU_USB_MOUSE_ENABLE
+#include <interfaces/input/tiku_mouse.h>
+#endif
+
+int surface_os_mouse_read(uint32_t *sequence, int *dx, int *dy, unsigned *buttons, int *connected)
+{
+#if TIKU_USB_MOUSE_ENABLE
+    tiku_mouse_report_t sample;
+    if (!tiku_mouse_read(sequence, &sample)) return 0;
+    *dx = sample.dx;
+    *dy = sample.dy;
+    *buttons = sample.buttons;
+    *connected = sample.connected;
+    return 1;
+#else
+    (void)sequence; (void)dx; (void)dy; (void)buttons; (void)connected;
+    return 0;
+#endif
 }

@@ -3,6 +3,7 @@
  * touch.c - bounded primary contact events for the product shell.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "touch_map.h"
 #include "touch.h"
 #include <string.h>
 
@@ -73,14 +74,9 @@ void surface_touch_report(surface_touch_t *t, surface_t *s, const surface_touch_
             if (r->points[i].id < r->points[primary].id) primary = i;
         t->id = r->points[primary].id;
     }
-    uint32_t x = r->points[primary].x - t->map.x_min;
-    uint32_t y = r->points[primary].y - t->map.y_min;
-    uint32_t dx = t->map.x_max - t->map.x_min, dy = t->map.y_max - t->map.y_min;
-    if (t->map.swap) { uint32_t a = x; x = y; y = a; a = dx; dx = dy; dy = a; }
-    int mapped_x = (int)((x * 799u + dx / 2) / dx);
-    int mapped_y = (int)((y * 479u + dy / 2) / dy);
-    if (t->map.invert_x) mapped_x = 799 - mapped_x;
-    if (t->map.invert_y) mapped_y = 479 - mapped_y;
+    int mapped_x, mapped_y;
+    surface_touch_map_point(&t->map, r->points[primary].x, r->points[primary].y,
+        &mapped_x, &mapped_y);
     int moved = t->x != mapped_x || t->y != mapped_y;
     t->x = mapped_x; t->y = mapped_y; t->active = 1;
     if (!was_active || moved) post(t, s, was_active ? TIKU_EVENT_POINTER_MOVE : TIKU_EVENT_POINTER_DOWN, now);

@@ -3,10 +3,11 @@
  * presentation.c - chunked conversion and per-buffer accumulated damage.
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "../../system/product/surface_panel.h"
 #include "presentation.h"
+#include "../../desktop/mouse.h"
 #include <string.h>
 
-#define RGB_BYTES (800u * 480u * sizeof(uint16_t))
 enum { IDLE, CONVERT, SUBMIT, WAIT };
 
 /** @brief Test complete pointer spans without overflowing their end addresses. */
@@ -74,14 +75,14 @@ static void add_part(tiku_rect_t *parts, tiku_rect_t r)
 #define MARK_FILL 0x3333u
 
 /** @brief The part of the screen a mark centred on (@p x, @p y) covers. */
-static tiku_rect_t mark_rect(int x, int y)
+static tiku_rect_t mark_rect(int x, int y, int size, int hotspot)
 {
-    int x0 = x - SURFACE_MARK_SIZE / 2, y0 = y - SURFACE_MARK_SIZE / 2;
-    int x1 = x0 + SURFACE_MARK_SIZE, y1 = y0 + SURFACE_MARK_SIZE;
+    int x0 = x - hotspot, y0 = y - hotspot;
+    int x1 = x0 + size, y1 = y0 + size;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 > 800) x1 = 800;
-    if (y1 > 480) y1 = 480;
+    if (x1 > SURFACE_DESKTOP_W) x1 = SURFACE_DESKTOP_W;
+    if (y1 > SURFACE_DESKTOP_H) y1 = SURFACE_DESKTOP_H;
     return x1 > x0 && y1 > y0 ? (tiku_rect_t){x0, y0, x1 - x0, y1 - y0} : (tiku_rect_t){0};
 }
 
@@ -90,9 +91,39 @@ static void unmark(surface_presentation_t *p, unsigned b)
 {
     tiku_rect_t r = p->marked[b];
     for (int row = 0; row < r.h; ++row)
-        memcpy(p->buffers[b] + (r.y + row) * 800 + r.x, p->under[b] + row * r.w,
+        memcpy(p->buffers[b] + (r.y + row) * SURFACE_DESKTOP_W + r.x, p->under[b] + row * r.w,
             (size_t)r.w * sizeof(uint16_t));
     p->marked[b] = (tiku_rect_t){0};
+}
+
+/* Each row runs from bit 0 at the left to bit 15 at the right. Shapes
+ * follow tiku_host_set_cursor: arrow, text, horizontal, vertical and
+ * diagonal resize, and hand. */
+static const uint16_t cursors[][16] = {
+    {1,3,7,15,31,63,127,255,511,1023,2047,127,123,241,240,96},
+    {0,0x0770,0x03e0,0x01c0,0x01c0,0x01c0,0x01c0,0x01c0,
+     0x01c0,0x01c0,0x01c0,0x01c0,0x03e0,0x0770},
+    {0,0,0,0,0x1008,0x300c,0x7ffe,0xffff,0x7ffe,0x300c,0x1008},
+    {0x0080,0x01c0,0x03e0,0x07f0,0x01c0,0x01c0,0x01c0,0x01c0,
+     0x01c0,0x01c0,0x01c0,0x07f0,0x03e0,0x01c0,0x0080},
+    {0,0x007e,0x003e,0x001e,0x003e,0x0076,0x00e2,0x01c0,
+     0x0380,0x4700,0x6e00,0x7c00,0x7800,0x7c00,0x7e00},
+    {0x0030,0x0078,0x0078,0x0078,0x03f8,0x0ff8,0x1ff8,0x1ffb,
+     0x1fff,0x1ffe,0x1ffc,0x0ff8,0x0ff0,0x07f0,0x07f0}
+};
+
+int surface_cursor_pixel(int shape, int size, int x, int y)
+{
+    if (shape < 0 || shape >= (int)(sizeof cursors / sizeof cursors[0]) ||
+        x < 0 || y < 0 || x >= size || y >= size) return -1;
+    x = x * 16 / size;
+    y = y * 16 / size;
+    const uint16_t *rows = cursors[shape];
+    unsigned bit = 1u << x;
+    if (!(rows[y] & bit)) return -1;
+    if (x == 0 || y == 0 || y == 15 || !(rows[y-1] & rows[y+1] & bit) ||
+        !(rows[y] & (bit >> 1)) || !(rows[y] & (bit << 1))) return 0;
+    return 0xffff;
 }
 
 /** @brief Draw the wanted mark into buffer @p b, keeping the pixels it covers. */
@@ -101,13 +132,21 @@ static void mark(surface_presentation_t *p, unsigned b)
     unmark(p, b);
     p->drawn[b] = p->mark_seq;
     if (!p->mark_on) return;
-    tiku_rect_t r = mark_rect(p->mark_x, p->mark_y);
+    int cursor = p->mark_on == 2;
+    int size = cursor ? p->cursor_size : SURFACE_MARK_SIZE;
+    int hotspot = cursor ? (p->cursor_shape == 0 ? 0 : 7 * size / 16) : size / 2;
+    tiku_rect_t r = mark_rect(p->mark_x, p->mark_y, size, hotspot);
     for (int row = 0; row < r.h; ++row) {
-        uint16_t *line = p->buffers[b] + (r.y + row) * 800 + r.x;
+        uint16_t *line = p->buffers[b] + (r.y + row) * SURFACE_DESKTOP_W + r.x;
         int dy = r.y + row - p->mark_y;
         memcpy(p->under[b] + row * r.w, line, (size_t)r.w * sizeof(uint16_t));
         for (int i = 0; i < r.w; ++i) {
             int dx = r.x + i - p->mark_x, d = dx * dx + dy * dy;
+            if (cursor) {
+                int color = surface_cursor_pixel(p->cursor_shape, size, dx + hotspot, dy + hotspot);
+                if (color >= 0) line[i] = (uint16_t)color;
+                continue;
+            }
             if (d > MARK_R * MARK_R) continue;
             if (d > (MARK_R - 1) * (MARK_R - 1)) line[i] = MARK_EDGE;
             else if (d > (MARK_R - 3) * (MARK_R - 3)) line[i] = MARK_RING;
@@ -125,17 +164,35 @@ static void mark_front(surface_presentation_t *p)
     tiku_rect_t was = p->marked[f];
     mark(p, f);
     tiku_rect_t changed = unite(was, p->marked[f]);
+    if (p->mark_on == 2 && was.w && p->marked[f].w &&
+        area(changed) > 2 * (area(was) + area(p->marked[f]))) {
+        (void)p->ops->amend(p->context, f, was);
+        changed = p->marked[f];
+    }
     if (changed.w) (void)p->ops->amend(p->context, f, changed);
+}
+
+static void set_mark(surface_presentation_t *p, int on, int shape, int size, int x, int y)
+{
+    if (!p || !p->ops || !p->ops->amend || p->failed) return;
+    if (on == p->mark_on && (!on || (shape == p->cursor_shape && size == p->cursor_size &&
+        x == p->mark_x && y == p->mark_y))) return;
+    p->cursor_shape = shape; p->cursor_size = size;
+    p->mark_on = on; p->mark_x = x; p->mark_y = y; ++p->mark_seq;
+    /* A submission keeps both buffers as they are until it completes. */
+    if (p->phase == IDLE || p->phase == CONVERT) mark_front(p);
 }
 
 void surface_presentation_mark(surface_presentation_t *p, int on, int x, int y)
 {
-    if (!p || !p->ops || !p->ops->amend || p->failed) return;
-    on = on != 0;
-    if (on == p->mark_on && (!on || (x == p->mark_x && y == p->mark_y))) return;
-    p->mark_on = on; p->mark_x = x; p->mark_y = y; ++p->mark_seq;
-    /* A submission keeps both buffers as they are until it completes. */
-    if (p->phase == IDLE || p->phase == CONVERT) mark_front(p);
+    set_mark(p, on != 0, 0, SURFACE_MARK_SIZE, x, y);
+}
+
+void surface_presentation_cursor(surface_presentation_t *p, int shape, int size, int x, int y)
+{
+    if (shape >= (int)(sizeof cursors / sizeof cursors[0])) shape = 0;
+    if (size < 1 || size > SURFACE_MARK_SIZE) size = SURFACE_CURSOR_NORMAL;
+    set_mark(p, shape < 0 ? 0 : 2, shape, size, x, y);
 }
 
 /** @brief Step past converted parts of @p back; zero once none remains. */
@@ -156,13 +213,13 @@ int surface_presentation_init(surface_presentation_t *p, uint16_t *a, size_t an,
     uint16_t *b, size_t bn, unsigned front, unsigned budget, uint64_t *sequence,
     const surface_scanout_ops_t *ops, void *context)
 {
-    if (!p || !a || !b || an < RGB_BYTES || bn < RGB_BYTES ||
+    if (!p || !a || !b || an < SURFACE_SCANOUT_BYTES || bn < SURFACE_SCANOUT_BYTES ||
         ((uintptr_t)a & 63u) || ((uintptr_t)b & 63u) ||
-        !disjoint(a, RGB_BYTES, b, RGB_BYTES) || front > 1 || !budget || budget > 4096 ||
+        !disjoint(a, SURFACE_SCANOUT_BYTES, b, SURFACE_SCANOUT_BYTES) || front > 1 || !budget || budget > 4096 ||
         !sequence || !ops || !ops->submit || !ops->poll) return 0;
     *p = (surface_presentation_t){.buffers = {a, b}, .front = front,
         .pixel_budget = budget, .sequence = sequence, .ops = ops, .context = context,
-        .pending = {{{0, 0, 800, 480}}, {{0, 0, 800, 480}}}};
+        .pending = {{{0, 0, SURFACE_DESKTOP_W, SURFACE_DESKTOP_H}}, {{0, 0, SURFACE_DESKTOP_W, SURFACE_DESKTOP_H}}}};
     return 1;
 }
 
@@ -173,13 +230,13 @@ tiku_present_result_t surface_presentation_submit(void *context, const tiku_pres
     if (p->phase) return TIKU_PRESENT_BUSY;
     if (!v || !v->owner || !v->token || !v->pixels ||
         ((uintptr_t)v->pixels & 3u) || v->format != TIKU_PIXELS_XRGB8888 ||
-        v->width != 800 || v->height != 480 || v->stride < 3200 ||
-        (v->stride & 3u) || v->stride > SIZE_MAX / 480 || v->bytes < v->stride * 480 ||
-        v->damage.x < 0 || v->damage.y < 0 || v->damage.x >= 800 || v->damage.y >= 480 ||
-        v->damage.w <= 0 || v->damage.h <= 0 || v->damage.w > 800 - v->damage.x ||
-        v->damage.h > 480 - v->damage.y ||
-        !disjoint(v->pixels, v->bytes, p->buffers[0], RGB_BYTES) ||
-        !disjoint(v->pixels, v->bytes, p->buffers[1], RGB_BYTES)) return TIKU_PRESENT_ERROR;
+        v->width != SURFACE_DESKTOP_W || v->height != SURFACE_DESKTOP_H || v->stride < SURFACE_DESKTOP_W * sizeof(uint32_t) ||
+        (v->stride & 3u) || v->stride > SIZE_MAX / SURFACE_DESKTOP_H || v->bytes < v->stride * SURFACE_DESKTOP_H ||
+        v->damage.x < 0 || v->damage.y < 0 || v->damage.x >= SURFACE_DESKTOP_W || v->damage.y >= SURFACE_DESKTOP_H ||
+        v->damage.w <= 0 || v->damage.h <= 0 || v->damage.w > SURFACE_DESKTOP_W - v->damage.x ||
+        v->damage.h > SURFACE_DESKTOP_H - v->damage.y ||
+        !disjoint(v->pixels, v->bytes, p->buffers[0], SURFACE_SCANOUT_BYTES) ||
+        !disjoint(v->pixels, v->bytes, p->buffers[1], SURFACE_SCANOUT_BYTES)) return TIKU_PRESENT_ERROR;
     p->source = *v;
     for (unsigned i = 0; i < 2; ++i) add_part(p->pending[i], v->damage);
     const tiku_rect_t *parts = p->pending[p->front ^ 1u];
@@ -239,7 +296,7 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
             unsigned count = right - p->x;
             if (count > remaining) count = remaining;
             const uint32_t *source = row + p->x;
-            uint16_t *destination = p->buffers[back] + p->y * 800u + p->x;
+            uint16_t *destination = p->buffers[back] + p->y * SURFACE_DESKTOP_W + p->x;
             for (unsigned i = 0; i < count; ++i) {
                 uint32_t color = source[i];
                 destination[i] = (uint16_t)(((color >> 8) & 0xf800u) |

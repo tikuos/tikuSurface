@@ -28,6 +28,17 @@ static int node_line(const char *path, char *out, size_t max)
     return (int)strlen(out);
 }
 
+/** @brief The running kernel release shown in the desktop About window. */
+void surface_about_system_release(char *out, size_t size)
+{
+    char version[48];
+
+    if (!out || !size) return;
+    out[0] = '\0';
+    if (node_line("/sys/version", version, sizeof version) > 0)
+        snprintf(out, size, "TikuOS %s", version);
+}
+
 /* The kernel's part name and its CPU rate in force, which `freq` changes
  * while the desktop runs. */
 int tiku_sys_processor(char *name, size_t max, unsigned long *hz)
@@ -48,14 +59,22 @@ void tiku_sys_frame_name(const char *raw, char *out, size_t max)
     snprintf(out, max, "%s", raw != NULL ? raw : "");
 }
 
-/* The desktop's heap: its size, and what the allocator has not handed out. */
+/* The detected PSRAM and the bytes available in its kernel tier and desktop
+ * heap. A runtime without a PSRAM extent reports its allocator's limits. */
 void tiku_sys_memory(long *total_kb, long *avail_kb)
 {
+    surface_desktop_memory_t memory;
     size_t total = 0, live = surface_os_desktop_heap_live();
 
     surface_os_desktop_heap_use(NULL, &total, NULL, NULL);
+    size_t available = total > live ? total - live : 0u;
+    surface_desktop_memory(&memory);
+    if (memory.psram) {
+        total = memory.psram;
+        available += memory.spare;
+    }
     if (total_kb != NULL) *total_kb = (long)(total / 1024u);
-    if (avail_kb != NULL) *avail_kb = (long)((total > live ? total - live : 0u) / 1024u);
+    if (avail_kb != NULL) *avail_kb = (long)(available / 1024u);
 }
 
 /** @brief Kernel node @p path whole in @p out.  @return its length, or 0 */
@@ -86,11 +105,7 @@ static void tagged(char *out, size_t max, size_t *at, const char *tag, const cha
     }
 }
 
-/* The kernel's SRAM and flash maps; PSRAM in address order: the file
- * store's shadow below the kernel's tier; in the tier, its free bytes, the
- * kernel's drivers' buffers (the card's bitmap), the runtime's two stacks,
- * settings stages and heap, and its frames at the tier's top; above the
- * tier, the desktop's statics. */
+/* The kernel SRAM and flash maps, with the PSRAM reservations in address order. */
 int tiku_sys_memory_map(char *out, size_t max)
 {
     char text[768];
@@ -103,20 +118,27 @@ int tiku_sys_memory_map(char *out, size_t max)
     surface_desktop_memory(&m);
     if (m.psram > 0u) {
         size_t live = surface_os_desktop_heap_live(), spare = m.spare;
+        size_t above = m.below <= m.psram && m.tier <= m.psram - m.below
+            ? m.psram - m.below - m.tier : 0;
+        size_t store = m.top_store <= above ? m.top_store : 0;
         char psram[512];
 
         snprintf(psram, sizeof psram,
-                 "total\t%lu\nshadow\t%lu\nfree\t%lu\ndrivers\t%lu\n"
+                 "total\t%lu\n%s\t%lu\nfree\t%lu\ndrivers\t%lu\n"
                  "stack\t%lu\t%lu\njobs\t%lu\t%lu\nsettings\t%lu\nheap\t%lu\t%lu\n"
-                 "frames\t%lu\nstatic\t%lu\n",
-                 (unsigned long)m.psram, (unsigned long)m.below, (unsigned long)spare,
+                 "frames\t%lu\n%s\t%lu\n",
+                 (unsigned long)m.psram, store ? "unassigned" : "shadow", (unsigned long)m.below, (unsigned long)spare,
                  (unsigned long)(m.tier > spare + m.span ? m.tier - spare - m.span : 0u),
                  (unsigned long)m.stack, (unsigned long)(m.stack - m.stack_used),
                  (unsigned long)m.jobs, (unsigned long)(m.jobs - m.jobs_used),
                  (unsigned long)m.stages, (unsigned long)m.heap, (unsigned long)live,
                  (unsigned long)m.frames,
-                 (unsigned long)(m.psram > m.below + m.tier ? m.psram - m.below - m.tier : 0u));
+                 store ? "Image space" : "static", (unsigned long)(above - store));
         tagged(out, max, &at, "psram", psram);
+        if (store) {
+            snprintf(psram, sizeof psram, "store\t%lu\n", (unsigned long)store);
+            tagged(out, max, &at, "psram", psram);
+        }
     }
     if (node_text("/sys/mem/nvm_map", text, sizeof text) > 0) tagged(out, max, &at, "nvm", text);
     return (int)at;

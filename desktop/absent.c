@@ -15,6 +15,7 @@
 #include "tiku_resource_channel.h"
 #include "tiku_resource_endpoint.h"
 #include "tiku_sound.h"
+#include "touch_preferences.h"
 #include "tiku_watch.h"
 #include "tiku_trk_desktop_private.h"
 #include <stdio.h>
@@ -93,10 +94,37 @@ int tiku_resource_channel_limits(const tiku_resource_channel_t *channel,
 const tiku_sound_backend_t *tiku_sound_host_backend(void) { return NULL; }
 
 /* The lifecycle VFS service exports desktop state to other processes. */
+/* The shell supplies its instance before opening the display. Its lifetime
+ * bounds the host's access to the touch lens on the desktop thread. */
+static desktop_t *panel_desktop;
+
+void surface_desktop_pointer_source(int mouse)
+{
+    desktop_t *app = panel_desktop;
+    if (!app) return;
+    app->lens.used = SURFACE_TOUCH_MODE && !mouse && surface_touch_magnifier();
+    if (mouse && app->lens.shown) {
+        desktop_damage(app, app->lens.box);
+        app->lens.shown = app->lens.held = app->lens.picking = 0;
+        app->lens.clicked_at = 0;
+    }
+}
+
+void surface_desktop_calibrate_touch(void)
+{
+    if (panel_desktop) desktop_calibrate_begin(panel_desktop);
+}
+
 int desktop_lifecycle_vfs_open(desktop_t *app) { (void)app; return 0; }
-void desktop_lifecycle_vfs_prepare(desktop_t *app) { (void)app; }
+void desktop_lifecycle_vfs_prepare(desktop_t *app)
+{
+    panel_desktop = app;
+#if SURFACE_TOUCH_MODE
+    surface_touch_preferences_load();
+#endif
+}
 void desktop_lifecycle_vfs_poll(desktop_t *app, uint64_t now) { (void)app; (void)now; }
-void desktop_lifecycle_vfs_close(desktop_t *app) { (void)app; }
+void desktop_lifecycle_vfs_close(desktop_t *app) { if (panel_desktop == app) panel_desktop = NULL; }
 int desktop_lifecycle_vfs_restarting(desktop_t *app) { (void)app; return 0; }
 
 /* Screen grabs are written as host image files. */

@@ -48,14 +48,14 @@ typedef struct {
     unsigned front, phase, failed, x, y, pixel_budget, part;
     unsigned hw, cpu;      /* a hardware conversion runs; the CPU converts */
     uint32_t convert_px;
-    int mark_on, mark_x, mark_y;
+    int mark_on, mark_x, mark_y, cursor_shape, cursor_size;
     unsigned mark_seq, drawn[2];
     tiku_rect_t marked[2];
     uint16_t under[2][SURFACE_MARK_SIZE * SURFACE_MARK_SIZE];
 } surface_presentation_t;
 
 /**
- * @brief Bind disjoint 64-byte-aligned 800x480 RGB565 buffers, initially invalid.
+ * @brief Bind disjoint 64-byte-aligned panel-sized RGB565 buffers, initially invalid.
  * @note Call on an idle/closed provider. The sequence starts at zero once and
  * persists across reopen. Pixel budgets are 1..4096; front is the scanned index.
  */
@@ -72,6 +72,9 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *);
  * follows when the flip completes. Each frame submitted carries the mark.
  */
 void surface_presentation_mark(surface_presentation_t *, int on, int x, int y);
+/** @brief Show the desktop cursor with its hotspot at the panel point. A
+ * negative shape hides it. Shapes follow the desktop host cursor order. */
+void surface_presentation_cursor(surface_presentation_t *, int shape, int size, int x, int y);
 /** @brief Complete retained source with error after the transport proves hardware closed. */
 int surface_presentation_closed(surface_presentation_t *);
 #endif

@@ -38,8 +38,8 @@ void tiku_host_text_rect(tiku_host_t *host, tiku_rect_t rect) { (void)host; (voi
 int tiku_host_scale(const tiku_host_t *host) { (void)host; return 1; }
 void tiku_host_set_title(tiku_host_t *host, const char *title) { (void)host; (void)title; }
 void tiku_host_set_fullscreen(tiku_host_t *host, int on) { (void)host; (void)on; }
-void tiku_host_set_cursor(tiku_host_t *host, int kind) { (void)host; (void)kind; }
-void tiku_host_set_resize_cursor(tiku_host_t *host, int enabled) { (void)host; (void)enabled; }
+void tiku_host_set_cursor(tiku_host_t *host, int kind) { if (host) surface_desktop_cursor_shape(kind); }
+void tiku_host_set_resize_cursor(tiku_host_t *host, int enabled) { tiku_host_set_cursor(host, enabled ? TIKU_CURSOR_RESIZE_DIAG : TIKU_CURSOR_ARROW); }
 
 int tiku_host_present_in(tiku_host_t *host, const tiku_surface_t *surface,
                          const tiku_rect_t *bounds)
@@ -60,10 +60,16 @@ int tiku_host_present_in(tiku_host_t *host, const tiku_surface_t *surface,
         r = (tiku_rect_t){x0, y0, x1 - x0, y1 - y0};
     }
     int result = surface_desktop_present(surface, r);
+    if (result != 0) return result;
     host->frames++;
     host->rectangles++;
     host->bytes += (uint64_t)r.w * (uint64_t)r.h * 4u;
     return result;
+}
+
+uint64_t surface_desktop_presented_frames(void)
+{
+    return panel.frames;
 }
 
 int tiku_host_present(tiku_host_t *host, const tiku_surface_t *surface)
@@ -89,9 +95,12 @@ void tiku_host_wait(tiku_host_t *host, int64_t timeout_us)
 
 int tiku_host_poll(tiku_host_t *host, tiku_event_t *event)
 {
-    if (host == NULL || event == NULL || !surface_desktop_input(event)) return 0;
+    if (host == NULL || event == NULL) return 0;
+    int source = surface_desktop_input(event);
+    if (source <= 0) return 0;
     if (event->type == TIKU_EVENT_POINTER_DOWN || event->type == TIKU_EVENT_POINTER_UP ||
         event->type == TIKU_EVENT_POINTER_MOVE) {
+        surface_desktop_pointer_source(source == 2);
         host->x = event->x;
         host->y = event->y;
     }

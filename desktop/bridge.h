@@ -17,8 +17,7 @@
 #include "bridge_os.h"
 #include "../platform/tikuos/media_io.h"
 
-#define SURFACE_DESKTOP_W 800
-#define SURFACE_DESKTOP_H 480
+#include "../system/product/surface_panel.h"
 #define SURFACE_DESKTOP_EVENTS 64u
 #define SURFACE_DESKTOP_LOG 4096u
 
@@ -53,9 +52,16 @@ extern surface_desktop_bridge_t surface_desktop_bridge;
 
 /** @brief Present a damaged region and wait for the panel to release its pixels. */
 int surface_desktop_present(const tiku_surface_t *surface, tiku_rect_t damage);
+/** @brief Successful panel presentations since the desktop host opened, read on its thread. */
+uint64_t surface_desktop_presented_frames(void);
 /** @brief Input readiness predicate for the desktop wait queue. */
 int surface_desktop_input_ready(void *unused);
-/** @brief Take the next input event, coalescing consecutive pointer moves. */
+/** @brief Set the shape requested by the shell's desktop host. */
+void surface_desktop_cursor_shape(int shape);
+/** @brief Select the shell's finger lens for touch events. Desktop thread only. */
+void surface_desktop_pointer_source(int mouse);
+/** @brief Take the next input event. Returns 2 for a mouse, 1 for another input,
+ * zero when empty; consecutive moves from the same source share an event. */
 int surface_desktop_input(tiku_input_event_t *event);
 #define SURFACE_HASH_PATH_BYTES 64u
 
@@ -95,6 +101,7 @@ void surface_desktop_camera_drawn(uint32_t us);
 typedef struct {
     size_t psram, below, tier, spare;
     size_t span, frames, stack, stack_used, jobs, jobs_used, stages, heap;
+    size_t top_store;  /* file store reserved at the upper end of PSRAM */
 } surface_desktop_memory_t;
 /** @brief Fill @p m; any thread. */
 void surface_desktop_memory(surface_desktop_memory_t *m);

@@ -266,6 +266,13 @@ $(BUILD)/test-surface: tests/test_surface.c tests/heap_trap.c $(PRODUCT) $(HOST)
 	$(CC) $(FLAGS) tests/test_surface.c tests/heap_trap.c $(PRODUCT) $(HOST) $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
 $(BUILD)/test-runtime: tests/test_runtime.c tests/heap_trap.c $(PRODUCT) platform/tikuos/runtime.c platform/tikuos/runtime.h $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
 	$(CC) $(FLAGS) -Iplatform/tikuos tests/test_runtime.c tests/heap_trap.c $(PRODUCT) platform/tikuos/runtime.c $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
+P4X_GEOMETRY_SRCS := platform/tikuos/presentation.c desktop/mouse_motion.c shell/settings.c shell/touch.c
+$(BUILD)/test-p4x-panel: tests/test_p4x_panel.c $(P4X_GEOMETRY_SRCS) system/product/surface_panel.h $(HOST) $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
+	$(CC) $(FLAGS) -DSURFACE_NATIVE_DESKTOP=1 -DTIKU_BOARD_ESP32_P4X_FUNCTION_EV_BOARD=1 -Iplatform/tikuos -ffunction-sections tests/test_p4x_panel.c $(P4X_GEOMETRY_SRCS) $(HOST) $(SDK_LIBRARIES) -Wl,--gc-sections -o $@
+.PHONY: p4x-panel-test
+p4x-panel-test: $(BUILD)/test-p4x-panel
+	$(BUILD)/test-p4x-panel
+test: p4x-panel-test
 $(BUILD)/test-presentation: tests/test_presentation.c tests/heap_trap.c platform/tikuos/presentation.c platform/tikuos/presentation.h $(HOST) $(HEADERS) $(LIBS) mk/host.mk | $(BUILD)
 	$(CC) $(FLAGS) -Iplatform/tikuos tests/test_presentation.c tests/heap_trap.c platform/tikuos/presentation.c $(HOST) $(SDK_LIBRARIES) -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=strdup -o $@
 LCD_TEST_RUNTIME := $(if $(filter 1,$(SURFACE_IMAGE)),tests/runtime_image.c,$(if $(filter 1,$(SURFACE_EDITOR_DOCUMENTS)),tests/runtime_documents.c,platform/tikuos/runtime.c))
@@ -543,3 +550,20 @@ desktop-runtime-test: $(BUILD)/test-desktop-runtime $(BUILD)/test-desktop-connec
 	$(BUILD)/test-desktop-runtime
 	$(BUILD)/test-desktop-connected
 endif
+
+$(BUILD)/test-mouse-motion: tests/test_mouse_motion.c desktop/mouse_motion.c desktop/mouse.h | $(BUILD)
+	$(CC) -std=c11 -Wall -Wextra -Werror $(CFLAGS) -Idesktop $(filter %.c,$^) -o $@
+.PHONY: mouse-motion-test
+mouse-motion-test: $(BUILD)/test-mouse-motion
+	$(BUILD)/test-mouse-motion
+test: mouse-motion-test
+
+$(BUILD)/test-mouse-settings: tests/test_mouse_settings.c desktop/mouse_preferences.c desktop/touch_preferences.c desktop/touch_preferences.h platform/tikuos/presentation.c \
+    foundation/kits/interface/tiku_text_layout_paint.c desktop/mouse.h | $(BUILD)
+	$(CC) $(MEDIA_INCLUDES) $(SDK_CFLAGS) -std=gnu11 -Wall -Wextra -Werror $(CFLAGS) \
+	    -Idesktop -Ifoundation/packages/shell/system/desktop $(addprefix -Ifoundation/kits/,support interface) \
+	    -ffunction-sections -fdata-sections $(filter %.c,$^) $(SDK_LIBRARIES) -Wl,--gc-sections -lm -o $@
+.PHONY: mouse-settings-test
+mouse-settings-test: $(BUILD)/test-mouse-settings
+	$(BUILD)/test-mouse-settings
+test: mouse-settings-test

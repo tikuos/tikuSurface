@@ -358,8 +358,9 @@ static void save_done(void *ctx)
         return;
     }
     snprintf(rec.view_name, sizeof rec.view_name, "%.63s", name ? name + 1 : job->path);
-    snprintf(text, sizeof text, "Saved %.80s, %lu KB%s.", rec.view_name,
+    snprintf(text, sizeof text, "Saved %.64s, %lu KB%s%s.", rec.view_name,
              (unsigned long)(job->samples * 2u + 44u + 1023u) / 1024u,
+             surface_desktop_bridge.card_mounted ? "" : " in RAM until reset",
              job->lost ? "; audio was lost while the desktop was busy" : "");
     note(text);
     refresh();
@@ -686,7 +687,8 @@ static void draw(tiku_window_t *w, tiku_surface_t *s, tiku_rect_t r, void *ctx)
     if (touches(s->clip, rec.list)) draw_list(s);
     if (touches(s->clip, rec.status_rect))
         tiku_text_line_draw(s, rec.status_rect, 0, rec.status[0] ? rec.status :
-                            "Mono, 16 kHz; recordings go to ~/Recordings.", TIKU_C_TEXT);
+                            (surface_desktop_bridge.card_mounted ? "Mono, 16 kHz. Recordings go to ~/Recordings on the card." :
+                             "Mono, 16 kHz. Recordings stay in ~/Recordings until reset."), TIKU_C_TEXT);
     if (touches(s->clip, rec.scope)) draw_scope(s);
     if (touches(s->clip, rec.meter)) draw_meter(s);
     if (touches(s->clip, rec.clock)) draw_clock(s);

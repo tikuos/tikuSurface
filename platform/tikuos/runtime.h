@@ -64,7 +64,8 @@ int surface_runtime_touch_log(char *buffer, size_t capacity);
  * holds until it is handed the frames. The native heap leaves a 256 KiB
  * allowance for the interpreter and local program services. */
 #if SURFACE_NATIVE_DESKTOP
-#define SURFACE_FRAMES_BYTES 1536000u
+#include "../../system/product/surface_panel.h"
+#define SURFACE_FRAMES_BYTES (2u * SURFACE_SCANOUT_BYTES)
 #define SURFACE_RUNTIME_BYTES (12050u * 1024u)
 #else
 #define SURFACE_RUNTIME_BYTES (1536000u + (SURFACE_IMAGE?8388608u:SURFACE_NOTES?3145728u:SURFACE_DIFF?1048576u:SURFACE_READER?786432u:SURFACE_DESKTOP?786432u:262144u) + 65536u + 4096u + SURFACE_LCD_ENABLE * 1536000u)

@@ -48,7 +48,7 @@ unsigned surface_settings_stored(int result);
 /**
  * @brief The map that puts the screen's edges where @p map now reports @p edge.
  * @param edge The positions @p map reports at the screen's left, right, top
- * and bottom edges, in pixels of an 800 by 480 screen.
+ * and bottom edges, in panel pixels.
  * @return 1 with the corrected map in @p out, its swap and inversions as in
  * @p map; 0 with @p out unchanged when @p map is invalid, an axis's two edges
  * are not in order or the result is no valid map. Bounds outside 0..65535

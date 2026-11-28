@@ -11,14 +11,22 @@
 #include <stdio.h>
 #include <string.h>
 
-static const struct { const char *path, *text; } nodes[] = {
+void surface_about_system_release(char *out, size_t size);
+static struct { const char *path, *text; } nodes[] = {
+    { "/sys/version", "0.42\n" },
+    { "/sys/device/mcu", "ESP32-P4 rev 3.2\n" },
+    { "/sys/cpu/freq", "400000000\n" },
     { "/sys/mem/sram_map", "bank\t393216\nstatic\t196224\ntier\t180608\t0\t1\nguard\t0\n"
                            "unassigned\t0\nstack\t16384\t11812\n" },
     { "/sys/mem/nvm_map", "kind\tFlash\ntotal\t16777216\ntier\t32768\t0\nstore\t1736704\t49152\n" },
 };
 static int open_fd = -1;
 static size_t read_at;
-static size_t psram_size = 16777216u;
+static surface_desktop_memory_t memory = {
+    .psram = 16777216u, .below = 1802240u, .tier = 14319616u, .spare = 121264u,
+    .span = 14137344u, .frames = 1536000u, .stack = 2883584u, .stack_used = 2716420u,
+    .jobs = 393216u, .jobs_used = 17188u, .stages = 49152u, .heap = 9275392u
+};
 
 int tiku_posix_open(const char *path, int flags)
 {
@@ -56,10 +64,7 @@ size_t surface_os_desktop_heap_live(void) { return 3600000u; }
 
 void surface_desktop_memory(surface_desktop_memory_t *m)
 {
-    /* The runtime's PSRAM: its frames and the rest, 1,536,000 and
-     * 12,601,344 bytes, with the heap the rest less the stacks and stages. */
-    *m = (surface_desktop_memory_t){ psram_size, 1802240u, 14319616u, 121264u, 14137344u, 1536000u,
-                                     2883584u, 2716420u, 393216u, 17188u, 49152u, 9275392u };
+    *m = memory;
 }
 
 int main(void)
@@ -68,10 +73,32 @@ int main(void)
     char map[2048], small[120];
     int n;
 
-    /* Free is the heap less what the allocator has handed out, not less
-     * its break. */
+    surface_about_system_release(small, sizeof small);
+    assert(!strcmp(small, "TikuOS 0.42") && open_fd == -1);
+    nodes[0].path = "";
+    surface_about_system_release(small, sizeof small);
+    assert(!small[0]);
+
+    unsigned long hz = 0;
+    assert(tiku_sys_processor(small, sizeof small, &hz) == 0);
+    assert(!strcmp(small, "ESP32-P4 rev 3.2") && hz == 400000000UL);
+
+    /* The board has free bytes in both the unreserved tier and the heap. */
+    surface_desktop_memory_t original = memory;
+    memory.psram = 32u * 1024u * 1024u;
+    memory.below = 64u * 1024u;
+    memory.tier = 24u * 1024u * 1024u - memory.below;
+    memory.span = 2457600u + 12339200u;
+    memory.spare = memory.tier - memory.span;
+    memory.top_store = 3u * 1024u * 1024u;
     tiku_sys_memory(&total, &avail);
-    assert(total == 8507392L / 1024 && avail == (8507392L - 3600000L) / 1024);
+    assert(total == 32768L && avail == (long)(memory.spare + 8507392u - 3600000u) / 1024);
+    tiku_sys_memory_map(map, sizeof map);
+    assert(strstr(map, "psram\tunassigned\t65536\n") && !strstr(map, "shadow"));
+    assert(strstr(map, "psram\tImage space\t5242880\npsram\tstore\t3145728\n"));
+    memory = original;
+    tiku_sys_memory(&total, NULL);
+    assert(total == 16384L);
 
     n = tiku_sys_memory_map(map, sizeof map);
     assert(n == (int)strlen(map) && open_fd == -1);
@@ -95,9 +122,11 @@ int main(void)
     assert(!strncmp(small, "sram\tbank\t393216\n", 17));
 
     /* Without the PSRAM's extent, no PSRAM map. */
-    psram_size = 0;
+    memory.psram = 0;
+    tiku_sys_memory(&total, &avail);
+    assert(total == 8507392L / 1024 && avail == (8507392L - 3600000L) / 1024);
     n = tiku_sys_memory_map(map, sizeof map);
     assert(n > 0 && !strstr(map, "psram") && strstr(map, "nvm\ttotal\t16777216\n"));
-    puts("PASS sys: free memory from the allocator's count; SRAM, PSRAM and flash maps");
+    puts("PASS sys: processor identity, clock, available PSRAM and memory maps");
     return 0;
 }
