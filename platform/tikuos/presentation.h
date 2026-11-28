@@ -47,6 +47,8 @@ typedef struct {
     uint64_t *sequence, ticket;
     unsigned front, phase, failed, x, y, pixel_budget, part;
     unsigned hw, cpu;      /* a hardware conversion runs; the CPU converts */
+    unsigned early;        /* set by the owner after init: the source lease
+                              ends with conversion, before the panel shows it */
     uint32_t convert_px;
     int mark_on, mark_x, mark_y, cursor_shape, cursor_size;
     unsigned mark_seq, drawn[2];

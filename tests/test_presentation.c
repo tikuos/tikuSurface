@@ -408,9 +408,49 @@ static void hardware(void)
     assert(tiku_framebuffer_destroy(&frame) && !host.memory.live);
 }
 
+/** @brief An early lease ends with conversion: the owner draws again while
+ *  the transport waits, and the next frame is refused until the panel has
+ *  this one. */
+static void early_lease(void)
+{
+    surface_host_t host;
+    surface_config_t config = surface_host_config(&host);
+    tiku_framebuffer_t *frame = tiku_framebuffer_borrow(config.allocator, pixels, sizeof pixels, 800, 480);
+    surface_presentation_t p;
+    sequence = 0; submits = 0;
+    submission_result = TIKU_PRESENT_OK; completion_result = TIKU_PRESENT_BUSY;
+    assert(surface_presentation_init(&p, scanout[0], sizeof scanout[0], scanout[1], sizeof scanout[1],
+        0, 4096, &sequence, &ops, NULL));
+    p.early = 1;
+    tiku_presenter_t presenter = {surface_presentation_submit, &p};
+    assert(tiku_framebuffer_begin(frame, NULL));
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_OK);
+    /* Held while the source is read. */
+    assert(surface_presentation_poll(&p) == TIKU_PRESENT_BUSY && !tiku_framebuffer_begin(frame, NULL));
+    convert(&p);
+    assert(surface_presentation_poll(&p) == TIKU_PRESENT_BUSY && p.front == 0);
+    assert(tiku_framebuffer_result(frame) == TIKU_PRESENT_OK);
+    assert(tiku_framebuffer_begin(frame, NULL));
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_BUSY);
+    completion_result = TIKU_PRESENT_OK;
+    assert(surface_presentation_poll(&p) == TIKU_PRESENT_OK && p.front == 1 && !p.phase);
+    completion_result = TIKU_PRESENT_BUSY;
+    /* The panel has the frame: the next one is taken. */
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_OK);
+    convert(&p);
+    /* A transport failure after the lease ended fails the presentation. */
+    completion_result = TIKU_PRESENT_ERROR;
+    assert(surface_presentation_poll(&p) == TIKU_PRESENT_ERROR && p.failed && p.front == 1);
+    assert(tiku_framebuffer_result(frame) == TIKU_PRESENT_OK);
+    assert(tiku_framebuffer_begin(frame, NULL));
+    assert(tiku_framebuffer_present(frame, presenter) == TIKU_PRESENT_ERROR);
+    (void)tiku_framebuffer_abandon(frame);
+    assert(tiku_framebuffer_destroy(&frame) && !host.memory.live);
+}
+
 int main(void)
 {
-    frames(); refusals_and_errors(); layouts_and_retries(); marks(); hardware();
-    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases, faults, touch marks and the hardware converter passed");
+    frames(); refusals_and_errors(); layouts_and_retries(); marks(); hardware(); early_lease();
+    puts("Presentation: bounded conversion, colors, buffer age, separate parts, source leases, early leases, faults, touch marks and the hardware converter passed");
     return 0;
 }

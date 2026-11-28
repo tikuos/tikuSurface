@@ -137,6 +137,7 @@ static struct {
     unsigned capture_row, capture_x;
     uint32_t sample_head;     /* samples taken, the ring's next slot modulo SAMPLE_SLOTS */
     uint32_t sample_idle;     /* turns that found the desktop thread blocked */
+    uint32_t wait_spent;      /* microseconds of polls since the frame was handed to the display */
     uint32_t sample_dump;     /* next sample the dump prints, or UINT32_MAX */
     uint32_t sample_end;      /* sample_head when the dump was asked for */
     uint64_t phase_at;        /* when the presentation entered its current phase */
@@ -1299,7 +1300,8 @@ static void sample_line(void)
 
 int surface_runtime_capture(void)
 {
-    if (!rt.running || rt.capturing || rt.presenting || rt.sample_dump != UINT32_MAX) return 0;
+    if (!rt.running || rt.capturing || rt.presenting || rt.presentation.phase ||
+        rt.sample_dump != UINT32_MAX) return 0;
     rt.capturing = 1;
     rt.capture_row = rt.capture_x = 0;
     {
@@ -1319,7 +1321,9 @@ static void take_frame(void)
     uint64_t token = devices.serial;
     tiku_present_view_t view;
 
-    if (rt.presenting || rt.capturing || !request) return;
+    /* A frame whose lease ended at conversion may still be on its way to
+     * the panel; the next one waits for it. */
+    if (rt.presenting || rt.presentation.phase || rt.capturing || !request) return;
     const tiku_surface_t *s = request->surface;
     view = (tiku_present_view_t){
         .pixels = s->px, .bytes = (size_t)s->w * (size_t)s->h * 4u,
@@ -1394,6 +1398,9 @@ int surface_runtime_start(void)
         rt.failed = 1;
         return 0;
     }
+    /* take_frame() and the poll loop follow the presentation's phase, so
+     * the desktop has its surface back as soon as it is converted. */
+    rt.presentation.early = 1;
     span = surface_os_reserve(SURFACE_RUNTIME_BYTES);
     if (span == NULL) {
         rt.failed = 1;
@@ -1507,7 +1514,8 @@ int surface_runtime_poll(void)
     woke |= mouse_input(begin);
     woke |= poll_paint();
     take_frame();
-    while (rt.presenting && surface_os_time() - begin < PRESENT_TURN_US) {
+    while ((rt.presenting || rt.presentation.phase) &&
+           surface_os_time() - begin < PRESENT_TURN_US) {
         unsigned before = rt.presentation.phase;
 
         if (before != rt.phase_seen) {
@@ -1526,7 +1534,15 @@ int surface_runtime_poll(void)
         uint64_t call = surface_os_time();
         tiku_present_result_t polled = surface_presentation_poll(&rt.presentation);
 
-        if (before == 1u) rt.convert_cpu += (uint32_t)(surface_os_time() - call);
+        uint32_t took = (uint32_t)(surface_os_time() - call);
+
+        if (before == 1u) rt.convert_cpu += took;
+        rt.wait_spent = before == 3u ? rt.wait_spent + took : 0u;
+        /* A turn's worth of polls publishes a frame's rows.  After that the
+         * panel's switch is all that is waited for, and while the desktop
+         * draws with no frame waiting it is looked for once a turn. */
+        if (polled == TIKU_PRESENT_BUSY && before == 3u && rt.wait_spent >= PRESENT_TURN_US &&
+            !rt.presenting && !devices.frame) break;
         /* A running PPA job queues the next turn from its interrupt. */
         if (polled == TIKU_PRESENT_BUSY && rt.presentation.hw && surface_os_display_convert_wakes())
             break;
@@ -1642,8 +1658,8 @@ int surface_runtime_continue(void)
      * has the processor meanwhile. */
     int work = rt.running && (rt.capturing || rt.sample_dump != UINT32_MAX ||
         rt.stacks_dump != UINT32_MAX || (card_pending() && card_urgent()) ||
-        (rt.presenting != 0 && ((rt.presentation.phase == 1u && !rt.presentation.hw) ||
-                                rt.presentation.phase == 2u)) ||
+        (rt.presentation.phase == 1u && !rt.presentation.hw) ||
+        rt.presentation.phase == 2u ||
          (rt.presenting == 0 && devices.frame != NULL));
 
     if (!work) {

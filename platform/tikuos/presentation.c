@@ -252,11 +252,12 @@ tiku_present_result_t surface_presentation_submit(void *context, const tiku_pres
     return TIKU_PRESENT_OK;
 }
 
-/** @brief Complete the source lease; a rejected completion retains provider state. */
+/** @brief End the submission, completing the source lease if conversion
+ *  has not; a rejected completion retains provider state. */
 static tiku_present_result_t complete(surface_presentation_t *p, tiku_present_result_t result)
 {
     if (result == TIKU_PRESENT_ERROR) p->failed = 1;
-    if (!tiku_framebuffer_complete(p->source.owner, p->source.token, result)) {
+    if (p->source.owner && !tiku_framebuffer_complete(p->source.owner, p->source.token, result)) {
         p->failed = 1;
         return TIKU_PRESENT_BUSY;
     }
@@ -311,6 +312,15 @@ tiku_present_result_t surface_presentation_poll(surface_presentation_t *p)
             if (p->ops->amend) {
                 mark(p, back);
                 p->region = unite(p->region, p->marked[back]);
+            }
+            /* The source is not read again.  An early lease ends here, and
+             * its owner draws the next frame while this one goes to the panel. */
+            if (p->early) {
+                if (!tiku_framebuffer_complete(p->source.owner, p->source.token, TIKU_PRESENT_OK)) {
+                    p->failed = 1;
+                    return TIKU_PRESENT_BUSY;
+                }
+                p->source = (tiku_present_view_t){0};
             }
             p->phase = SUBMIT;
         }
