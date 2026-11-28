@@ -310,3 +310,25 @@ desktop available for physical touch for two minutes after capture.
 The board reports the GT911 touch history before
 reset. `--corrupt-segment` changes one byte in the transfer to check that the
 loader rejects the payload.
+
+## Standalone P4X flash boot
+
+On the ESP32-P4X-Function-EV-Board with silicon revision 3.2 and 16 MiB
+flash, the ROM loads TikuOS from offset `0x2000`. TikuOS initializes
+PSRAM, copies the desktop from offset `0x50000` and checks its SHA-256
+before starting TikuSurface. Power or reset starts the desktop without a
+host computer. The file store, settings and recordings still use RAM.
+
+From the matching TikuOS checkout, with the Espressif RISC-V toolchain on
+the path and esptool 5.6 installed in the selected Python interpreter, run
+
+```sh
+make -j8 -f tikuSurface/desktop/p4x-flash.mk install-p4x-desktop \
+    TOOLCHAIN_PREFIX=riscv32-esp-elf- DESKTOP_ASSETS=/path/to/TikuDesktop \
+    DESKTOP_FOUNDATION=/path/to/Stomme PORT="$PORT" SERIAL="$P4_SERIAL"
+```
+
+The installer checks the board identity and the paired images, programs
+the desktop followed by its matching kernel, verifies both flash ranges
+and resets the board. It waits for the desktop to report a presented frame
+and completed startup. Run the same command after changing the sources.

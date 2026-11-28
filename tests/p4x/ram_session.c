@@ -288,8 +288,9 @@ int __wrap_tiku_p4x_panel_pattern(void)
         }
         if (c == 'v') {
 #ifdef P4X_FLASH_BOOT
-            snprintf(report, sizeof report, "TikuOS %s TikuSurface flash frames=%u ready=%d\r\n",
-                     TIKU_VERSION, frames, boot_finished == 2);
+            /* One line: a second message would not fit the 64-byte FIFO. */
+            snprintf(report, sizeof report, "TikuOS %s PSRAM %uMHz TikuSurface flash frames=%u ready=%d\r\n",
+                     TIKU_VERSION, (unsigned)(tiku_p4_psram_hz() / 1000000u), frames, boot_finished == 2);
 #else
             snprintf(report, sizeof report, "CPU0 %u kHz frames=%u standalone=%d\r\n",
                      measured_cpu_khz(), frames, standalone);
